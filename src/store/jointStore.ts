@@ -95,6 +95,7 @@ interface JointStore {
   loadJoint: () => Promise<void>;
   createJointAccount: (name?: string) => Promise<JointAccount | null>;
   joinJointAccount: (inviteCode: string) => Promise<JointAccount | null>;
+  leaveJointAccount: () => Promise<boolean>;
   loadJointExpenses: () => Promise<void>;
   setMonthlyBudget: (amount: number) => Promise<void>;
   syncBudgetWithLocal: () => Promise<void>;
@@ -445,6 +446,43 @@ export const useJointStore = create<JointStore>((set, get) => ({
     } catch (err: any) {
       set({ isBusy: false, error: err?.message || 'Could not join joint account' });
       return null;
+    }
+  },
+
+  leaveJointAccount: async () => {
+    const token = authToken();
+    const joint = get().joint;
+    if (!token || !joint) return false;
+    set({ isBusy: true, error: null });
+    try {
+      await apiRequest(`/api/groups/${joint.id}/leave`, {
+        method: 'POST',
+        token,
+        timeoutMs: 25000,
+      });
+      try {
+        await AsyncStorage.multiRemove([
+          cacheKey(joint.id),
+          outboxKey(joint.id),
+          `@expenso_local_synced_${joint.id}`,
+          `@expenso_local_synced_ids_${joint.id}`,
+        ]);
+      } catch {
+        // ignore
+      }
+      set({
+        joint: null,
+        groups: [],
+        expenses: [],
+        outbox: [],
+        pendingCount: 0,
+        isBusy: false,
+        error: null,
+      });
+      return true;
+    } catch (err: any) {
+      set({ isBusy: false, error: err?.message || 'Could not leave joint account' });
+      return false;
     }
   },
 

@@ -7,7 +7,9 @@ import {
   TextInput,
   Pressable,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Spacing, Typography, Radius } from '../constants/theme';
@@ -15,6 +17,8 @@ import { getTabBarBottomInset } from '../constants/layout';
 import { useTheme } from '../hooks/useTheme';
 import { useAuthStore } from '../store/authStore';
 import { useJointStore } from '../store/jointStore';
+import { useExpenseStore } from '../store/expenseStore';
+import { useActivityStore } from '../store/activityStore';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { shareInviteViaWhatsApp, shareInviteCode } from '../utils/shareInvite';
 
@@ -26,6 +30,8 @@ export function ProfileScreen() {
 
   const user = useAuthStore(s => s.user);
   const logout = useAuthStore(s => s.logout);
+  const deleteAccount = useAuthStore(s => s.deleteAccount);
+  const authBusy = useAuthStore(s => s.isBusy);
 
   const joint = useJointStore(s => s.joint);
   const jointBusy = useJointStore(s => s.isBusy);
@@ -33,10 +39,12 @@ export function ProfileScreen() {
   const loadJoint = useJointStore(s => s.loadJoint);
   const createJointAccount = useJointStore(s => s.createJointAccount);
   const joinJointAccount = useJointStore(s => s.joinJointAccount);
+  const leaveJointAccount = useJointStore(s => s.leaveJointAccount);
   const clearJointError = useJointStore(s => s.clearError);
 
   const [inviteCode, setInviteCode] = useState('');
   const [sharing, setSharing] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
 
   useEffect(() => {
     if (user) loadJoint();
@@ -76,8 +84,88 @@ export function ProfileScreen() {
 
   const handleLogout = useCallback(async () => {
     await logout();
-    useJointStore.setState({ joint: null, expenses: [] });
+    useJointStore.setState({ joint: null, groups: [], expenses: [], outbox: [], pendingCount: 0 });
   }, [logout]);
+
+  const handleLeaveJoint = useCallback(() => {
+    Alert.alert(
+      'Leave joint account?',
+      'You will separate from your partner. Shared expenses stay with them. You can create or join another joint account later.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: async () => {
+            setActionBusy(true);
+            clearJointError();
+            try {
+              const ok = await leaveJointAccount();
+              if (!ok) {
+                Alert.alert('Could not leave', useJointStore.getState().error || 'Try again');
+              }
+            } finally {
+              setActionBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  }, [leaveJointAccount, clearJointError]);
+
+  const wipeLocalData = useCallback(async () => {
+    await useActivityStore.getState().clearAll();
+    await useExpenseStore.getState().clearAllExpenses();
+    const keys = await AsyncStorage.getAllKeys();
+    const wipe = keys.filter(
+      k =>
+        k.startsWith('@expenso_') ||
+        k.startsWith('@expensewise_') ||
+        k.includes('joint'),
+    );
+    if (wipe.length) await AsyncStorage.multiRemove(wipe);
+    useJointStore.setState({
+      joint: null,
+      groups: [],
+      expenses: [],
+      outbox: [],
+      pendingCount: 0,
+    });
+  }, []);
+
+  const handleDeleteAllData = useCallback(() => {
+    Alert.alert(
+      'Delete all my data?',
+      'This permanently deletes your account, local expenses, activity, and leaves any joint account. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete everything',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert('Are you sure?', 'Confirm delete account and all cloud + local data.', [
+              { text: 'Cancel', style: 'cancel' },
+              {
+                text: 'Yes, delete',
+                style: 'destructive',
+                onPress: async () => {
+                  setActionBusy(true);
+                  try {
+                    await deleteAccount();
+                    await wipeLocalData();
+                  } catch (err: any) {
+                    Alert.alert('Delete failed', err?.message || 'Try again');
+                  } finally {
+                    setActionBusy(false);
+                  }
+                },
+              },
+            ]);
+          },
+        },
+      ],
+    );
+  }, [deleteAccount, wipeLocalData]);
 
   if (!user) {
     return (
@@ -87,6 +175,8 @@ export function ProfileScreen() {
       </View>
     );
   }
+
+  const busy = jointBusy || authBusy || actionBusy;
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -118,7 +208,7 @@ export function ProfileScreen() {
               <Text style={styles.profileEmail}>{user.email}</Text>
             </View>
           </View>
-          <Pressable style={styles.logoutBtn} onPress={handleLogout}>
+          <Pressable style={styles.logoutBtn} onPress={handleLogout} disabled={busy}>
             <Text style={styles.logoutText}>Logout</Text>
           </Pressable>
         </View>
@@ -148,16 +238,20 @@ export function ProfileScreen() {
             </View>
 
             <Pressable
-              style={[styles.whatsappBtn, sharing && styles.btnDisabled]}
+              style={[styles.whatsappBtn, (sharing || busy) && styles.btnDisabled]}
               onPress={handleWhatsAppShare}
-              disabled={sharing}
+              disabled={sharing || busy}
             >
               <Text style={styles.whatsappBtnText}>
                 {sharing ? 'Opening…' : 'Share code on WhatsApp'}
               </Text>
             </Pressable>
 
-            <Pressable style={styles.secondaryBtn} onPress={handleMoreShare} disabled={sharing}>
+            <Pressable
+              style={styles.secondaryBtn}
+              onPress={handleMoreShare}
+              disabled={sharing || busy}
+            >
               <Text style={styles.secondaryBtnText}>More share options</Text>
             </Pressable>
 
@@ -168,6 +262,23 @@ export function ProfileScreen() {
                 </Text>
               </View>
             )}
+
+            <Pressable
+              style={[styles.dangerOutlineBtn, busy && styles.btnDisabled]}
+              onPress={handleLeaveJoint}
+              disabled={busy}
+            >
+              {busy ? (
+                <ActivityIndicator color={colors.danger} />
+              ) : (
+                <Text style={styles.dangerOutlineText}>Leave joint account</Text>
+              )}
+            </Pressable>
+            <Text style={styles.dangerHint}>
+              Separates you from this shared home. Partner keeps the joint expenses.
+            </Text>
+
+            {!!jointError && <Text style={styles.error}>{jointError}</Text>}
           </View>
         ) : (
           <View style={styles.card}>
@@ -176,9 +287,9 @@ export function ProfileScreen() {
               Create it, then share the invite code with your partner on WhatsApp.
             </Text>
             <Pressable
-              style={[styles.primaryBtn, jointBusy && styles.btnDisabled]}
+              style={[styles.primaryBtn, busy && styles.btnDisabled]}
               onPress={handleCreateJoint}
-              disabled={jointBusy}
+              disabled={busy}
             >
               <LinearGradient
                 colors={[colors.gradientStart, colors.gradientEnd]}
@@ -206,9 +317,9 @@ export function ProfileScreen() {
               autoCapitalize="characters"
             />
             <Pressable
-              style={[styles.secondaryBtn, jointBusy && styles.btnDisabled]}
+              style={[styles.secondaryBtn, busy && styles.btnDisabled]}
               onPress={handleJoinJoint}
-              disabled={jointBusy || !inviteCode.trim()}
+              disabled={busy || !inviteCode.trim()}
             >
               <Text style={styles.secondaryBtnText}>Join Joint Account</Text>
             </Pressable>
@@ -225,6 +336,27 @@ export function ProfileScreen() {
             <Text style={styles.tipText}>3. Both use Home — expenses sync together</Text>
           </View>
         )}
+
+        <Text style={[styles.sectionTitle, { marginTop: Spacing.lg }]}>Danger zone</Text>
+        <Text style={styles.sectionHint}>
+          Permanently remove your account and data from Expenso.
+        </Text>
+        <View style={styles.card}>
+          <Pressable
+            style={[styles.dangerFillBtn, busy && styles.btnDisabled]}
+            onPress={handleDeleteAllData}
+            disabled={busy}
+          >
+            {actionBusy ? (
+              <ActivityIndicator color="#FFF" />
+            ) : (
+              <Text style={styles.dangerFillText}>Delete my all data</Text>
+            )}
+          </Pressable>
+          <Text style={styles.dangerHint}>
+            Deletes account, cloud joint data you own, local expenses & activity. Cannot be undone.
+          </Text>
+        </View>
       </ScrollView>
     </View>
   );
@@ -356,5 +488,28 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     },
     tipTitle: { ...Typography.bodyBold, color: colors.text, marginBottom: Spacing.sm },
     tipText: { ...Typography.caption, color: colors.textSecondary, marginBottom: 4, lineHeight: 18 },
+    dangerOutlineBtn: {
+      marginTop: Spacing.lg,
+      paddingVertical: Spacing.md,
+      borderRadius: Radius.lg,
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: colors.danger + '66',
+      backgroundColor: colors.danger + '12',
+    },
+    dangerOutlineText: { ...Typography.bodyBold, color: colors.danger },
+    dangerFillBtn: {
+      paddingVertical: Spacing.md,
+      borderRadius: Radius.lg,
+      alignItems: 'center',
+      backgroundColor: colors.danger,
+    },
+    dangerFillText: { ...Typography.bodyBold, color: '#FFF' },
+    dangerHint: {
+      ...Typography.caption,
+      color: colors.textMuted,
+      marginTop: Spacing.sm,
+      lineHeight: 18,
+    },
   });
 }

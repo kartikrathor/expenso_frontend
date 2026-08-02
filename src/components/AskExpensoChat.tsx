@@ -11,7 +11,6 @@ import {
   Keyboard,
   Platform,
   ScrollView,
-  Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Spacing, Typography, Radius } from '../constants/theme';
@@ -64,7 +63,7 @@ export function AskExpensoChat({
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [chips, setChips] = useState<string[]>(startChips);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [messages, setMessages] = useState<ChatBubble[]>([
     {
       id: 'welcome',
@@ -74,19 +73,15 @@ export function AskExpensoChat({
     },
   ]);
   const listRef = useRef<FlatList>(null);
-  const [inputBarHeight, setInputBarHeight] = useState(64);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const onShow = (e: { endCoordinates: { height: number; screenY: number } }) => {
-      const screenH = Dimensions.get('screen').height;
-      const fromScreen = Math.max(0, Math.round(screenH - e.endCoordinates.screenY));
-      const reported = Math.round(e.endCoordinates.height || 0);
-      setKeyboardHeight(Math.max(fromScreen, reported));
-      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
+    const onShow = () => {
+      setKeyboardOpen(true);
+      setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 80);
     };
-    const onHide = () => setKeyboardHeight(0);
+    const onHide = () => setKeyboardOpen(false);
     const subShow = Keyboard.addListener(showEvent, onShow);
     const subHide = Keyboard.addListener(hideEvent, onHide);
     return () => {
@@ -113,10 +108,10 @@ export function AskExpensoChat({
       .catch(() => {});
   }, [token]);
 
-  const composerBottom =
-    Platform.OS === 'android' && keyboardHeight > 0
-      ? Math.max(0, keyboardHeight - Math.max(insets.bottom, 0))
-      : tabInset;
+  // Above floating tab when closed; flush to bottom when keyboard is open (tab bar hides).
+  const composerPadBottom = keyboardOpen
+    ? Math.max(insets.bottom, Spacing.sm)
+    : tabInset;
 
   const [lastIntent, setLastIntent] = useState<string | undefined>();
   const messagesRef = useRef(messages);
@@ -225,7 +220,6 @@ export function AskExpensoChat({
     [token, busy, expenses, monthlyBudget, isJoint, lastIntent],
   );
 
-  const Root = Platform.OS === 'ios' ? KeyboardAvoidingView : View;
   const rootProps =
     Platform.OS === 'ios'
       ? {
@@ -235,7 +229,7 @@ export function AskExpensoChat({
       : {};
 
   return (
-    <Root
+    <KeyboardAvoidingView
       style={[styles.root, { paddingTop: insets.top, backgroundColor: colors.background }]}
       {...rootProps}
     >
@@ -257,7 +251,7 @@ export function AskExpensoChat({
 
       <FlatList
         ref={listRef}
-        style={[styles.listFlex, { marginBottom: inputBarHeight + composerBottom }]}
+        style={styles.listFlex}
         data={messages}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.list}
@@ -302,10 +296,7 @@ export function AskExpensoChat({
         }
       />
 
-      <View
-        style={[styles.inputBar, { bottom: composerBottom }]}
-        onLayout={e => setInputBarHeight(e.nativeEvent.layout.height)}
-      >
+      <View style={[styles.inputBar, { paddingBottom: composerPadBottom }]}>
         <View style={styles.inputRow}>
           <TextInput
             style={styles.input}
@@ -336,7 +327,7 @@ export function AskExpensoChat({
           </Pressable>
         </View>
       </View>
-    </Root>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -398,9 +389,6 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     },
     chipText: { ...Typography.small, color: colors.primaryLight, fontWeight: '700' },
     inputBar: {
-      position: 'absolute',
-      left: 0,
-      right: 0,
       backgroundColor: colors.background,
       borderTopWidth: 1,
       borderTopColor: colors.border,

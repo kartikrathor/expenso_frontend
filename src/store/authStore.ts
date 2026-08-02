@@ -22,6 +22,7 @@ interface AuthStore {
   register: (name: string, email: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
   clearError: () => void;
 }
 
@@ -96,6 +97,24 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   logout: async () => {
     await clearSession();
     set({ user: null, token: null, error: null });
+  },
+
+  deleteAccount: async () => {
+    const token = get().token;
+    if (!token) throw new Error('Not logged in');
+    set({ isBusy: true, error: null });
+    try {
+      await apiRequest('/api/auth/me', {
+        method: 'DELETE',
+        token,
+        timeoutMs: 30000,
+      });
+      await clearSession();
+      set({ user: null, token: null, isBusy: false, error: null });
+    } catch (err: any) {
+      set({ isBusy: false, error: err?.message || 'Could not delete account' });
+      throw err;
+    }
   },
 
   clearError: () => set({ error: null }),

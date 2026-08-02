@@ -30,7 +30,10 @@ export function AppNavigator() {
     <NavigationContainer theme={navTheme}>
       <Tab.Navigator
         tabBar={props => <FloatingTabBar {...props} />}
-        screenOptions={{ headerShown: false }}
+        screenOptions={{
+          headerShown: false,
+          tabBarHideOnKeyboard: true,
+        }}
       >
         <Tab.Screen name="Home" component={HomeScreen} />
         <Tab.Screen name="Ask" component={AskScreen} />
