@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   Pressable,
   ActivityIndicator,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   ScrollView,
 } from 'react-native';
@@ -28,6 +29,7 @@ export function AuthScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const scrollRef = useRef<ScrollView>(null);
 
   const isBusy = useAuthStore(s => s.isBusy);
   const authError = useAuthStore(s => s.error);
@@ -41,6 +43,39 @@ export function AuthScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<AuthFieldErrors>({});
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = (e: { endCoordinates: { height: number } }) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    };
+    const onHide = () => setKeyboardHeight(0);
+    const subShow = Keyboard.addListener(showEvent, onShow);
+    const subHide = Keyboard.addListener(hideEvent, onHide);
+    return () => {
+      subShow.remove();
+      subHide.remove();
+    };
+  }, []);
+
+  const scrollToFocused = useCallback(() => {
+    // Wait for keyboard + layout (Android adjustResize) before scrolling.
+    const delay = Platform.OS === 'android' ? 120 : 50;
+    setTimeout(() => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    }, delay);
+  }, []);
+
+  useEffect(() => {
+    if (keyboardHeight > 0) {
+      const t = setTimeout(() => {
+        scrollRef.current?.scrollToEnd({ animated: true });
+      }, 50);
+      return () => clearTimeout(t);
+    }
+  }, [keyboardHeight]);
 
   const clearFieldError = useCallback((field: AuthField) => {
     setFieldErrors(prev => {
@@ -93,8 +128,10 @@ export function AuthScreen() {
   const inputBorder = (field: AuthField) =>
     fieldErrors[field] ? { borderColor: colors.danger } : null;
 
+  const keyboardOpen = keyboardHeight > 0;
+
   return (
-    <View style={[styles.root, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+    <View style={[styles.root, { paddingTop: insets.top }]}>
       <LinearGradient
         colors={[colors.primary + '22', colors.background, colors.background]}
         style={StyleSheet.absoluteFill}
@@ -103,23 +140,40 @@ export function AuthScreen() {
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
       >
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          ref={scrollRef}
+          contentContainerStyle={[
+            styles.scroll,
+            keyboardOpen && styles.scrollKeyboardOpen,
+            {
+              // Android uses adjustResize — avoid stacking full keyboard height.
+              paddingBottom:
+                Spacing.lg +
+                insets.bottom +
+                (Platform.OS === 'ios' && keyboardOpen ? keyboardHeight * 0.35 : 0) +
+                (keyboardOpen ? Spacing.xl : 0),
+            },
+          ]}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
         >
-          <View style={styles.brand}>
+          <View style={[styles.brand, keyboardOpen && styles.brandCompact]}>
             <LinearGradient
               colors={[colors.gradientStart, colors.gradientEnd]}
-              style={styles.logo}
+              style={[styles.logo, keyboardOpen && styles.logoCompact]}
             >
-              <Text style={styles.logoEmoji}>💸</Text>
+              <Text style={[styles.logoEmoji, keyboardOpen && styles.logoEmojiCompact]}>💸</Text>
             </LinearGradient>
             <Text style={styles.appName}>Expenso</Text>
-            <Text style={styles.tagline}>
-              Sign in to manage expenses — alone or with your partner in a joint account.
-            </Text>
+            {!keyboardOpen && (
+              <Text style={styles.tagline}>
+                Sign in to manage expenses — alone or with your partner in a joint account.
+              </Text>
+            )}
           </View>
 
           <View style={styles.card}>
@@ -147,6 +201,7 @@ export function AuthScreen() {
                     setName(v);
                     clearFieldError('name');
                   }}
+                  onFocus={scrollToFocused}
                   placeholder="Your name"
                   placeholderTextColor={colors.textMuted}
                   autoCapitalize="words"
@@ -164,6 +219,7 @@ export function AuthScreen() {
                 setEmail(v);
                 clearFieldError('email');
               }}
+              onFocus={scrollToFocused}
               placeholder="you@email.com"
               placeholderTextColor={colors.textMuted}
               keyboardType="email-address"
@@ -182,6 +238,7 @@ export function AuthScreen() {
                   setPassword(v);
                   clearFieldError('password');
                 }}
+                onFocus={scrollToFocused}
                 placeholder="Your password"
                 placeholderTextColor={colors.textMuted}
                 secureTextEntry={!showPassword}
@@ -229,7 +286,9 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     root: { flex: 1, backgroundColor: colors.background },
     flex: { flex: 1 },
     scroll: { padding: Spacing.lg, paddingTop: Spacing.xl, flexGrow: 1, justifyContent: 'center' },
+    scrollKeyboardOpen: { justifyContent: 'flex-start', paddingTop: Spacing.md },
     brand: { alignItems: 'center', marginBottom: Spacing.xl },
+    brandCompact: { marginBottom: Spacing.md },
     logo: {
       width: 84,
       height: 84,
@@ -238,7 +297,9 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       justifyContent: 'center',
       marginBottom: Spacing.md,
     },
+    logoCompact: { width: 56, height: 56, borderRadius: 16, marginBottom: Spacing.sm },
     logoEmoji: { fontSize: 40 },
+    logoEmojiCompact: { fontSize: 28 },
     appName: { ...Typography.h1, color: colors.text },
     tagline: {
       ...Typography.caption,

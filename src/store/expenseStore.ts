@@ -20,6 +20,7 @@ interface ExpenseStore {
   monthlyBudget: number;
   isLoaded: boolean;
   loadExpenses: () => Promise<void>;
+  clearAllExpenses: () => Promise<void>;
   setMonthlyBudget: (amount: number) => Promise<void>;
   addExpense: (expense: Omit<Expense, 'id' | 'createdAt'>) => Promise<Expense>;
   updateExpense: (id: string, changes: Partial<Omit<Expense, 'id' | 'createdAt'>>) => Promise<void>;
@@ -75,6 +76,11 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     } catch {
       set({ expenses: [], monthlyBudget: 0, isLoaded: true });
     }
+  },
+
+  clearAllExpenses: async () => {
+    set({ expenses: [] });
+    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify([]));
   },
 
   setMonthlyBudget: async (amount) => {

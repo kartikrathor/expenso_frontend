@@ -9,16 +9,16 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  RefreshControl,
 } from 'react-native';
 import Animated, { FadeInDown, useAnimatedStyle, withSpring, useSharedValue } from 'react-native-reanimated';
-import { useFocusEffect } from '@react-navigation/native';
 import { WaterGradient } from '../components/WaterGradient';
 import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useExpenseStore } from '../store/expenseStore';
-import { useAuthStore } from '../store/authStore';
 import { useJointStore } from '../store/jointStore';
 import { useActivityStore } from '../store/activityStore';
+import { useHouseholdExpenses } from '../hooks/useHouseholdExpenses';
 import { ExpenseCard } from '../components/ExpenseCard';
 import { EmptyState } from '../components/EmptyState';
 import { AddExpenseModal, ExpenseSaveData } from '../components/AddExpenseModal';
@@ -55,46 +55,26 @@ export function HomeScreen() {
   const [toast, setToast] = useState<{ amount: number; merchant: MerchantId; label: string } | null>(null);
   const fabScale = useSharedValue(1);
 
-  const user = useAuthStore(s => s.user);
-  const joint = useJointStore(s => s.joint);
-  const jointExpenses = useJointStore(s => s.expenses);
-  const loadJoint = useJointStore(s => s.loadJoint);
+  const { isJoint, joint, expenses: householdExpenses, getFiltered, getTotal, getTodayTotal, monthlyBudget, setMonthlyBudget, onRefresh, refreshing, pendingCount, isSyncing } =
+    useHouseholdExpenses();
   const addJointExpense = useJointStore(s => s.addJointExpense);
 
-  const isJoint = !!(user && joint);
-
   const addExpense = useExpenseStore(s => s.addExpense);
-  const setMonthlyBudget = useExpenseStore(s => s.setMonthlyBudget);
-  const expenses = useExpenseStore(s => s.expenses);
-  const monthlyBudget = useExpenseStore(s => s.monthlyBudget);
   const { requestDelete, deleteModal } = useDeleteExpense();
   const { requestEdit, editModal } = useEditExpense();
 
-  useFocusEffect(
-    useCallback(() => {
-      if (user) loadJoint();
-    }, [user, loadJoint]),
-  );
+  const filtered = useMemo(() => getFiltered(filter), [getFiltered, filter, householdExpenses]);
+  const total = useMemo(() => getTotal(filter), [getTotal, filter, householdExpenses]);
+  const monthTotal = useMemo(() => getTotal('month'), [getTotal, householdExpenses]);
+  const todayTotal = useMemo(() => getTodayTotal(), [getTodayTotal, householdExpenses]);
 
-  const filtered = useMemo(() => {
-    if (isJoint) return useJointStore.getState().getFiltered(filter);
-    return useExpenseStore.getState().getFilteredExpenses(filter);
-  }, [isJoint, jointExpenses, expenses, filter]);
-
-  const total = useMemo(() => {
-    if (isJoint) return useJointStore.getState().getTotal(filter);
-    return useExpenseStore.getState().getTotalSpent(filter);
-  }, [isJoint, jointExpenses, expenses, filter]);
-
-  const monthTotal = useMemo(() => {
-    if (isJoint) return useJointStore.getState().getTotal('month');
-    return useExpenseStore.getState().getTotalSpent('month');
-  }, [isJoint, jointExpenses, expenses]);
-
-  const todayTotal = useMemo(() => {
-    if (isJoint) return useJointStore.getState().getTodayTotal();
-    return useExpenseStore.getState().getTodaySpent();
-  }, [isJoint, jointExpenses, expenses]);
+  // Home list = latest shared/personal items (same pool as History).
+  // Time chips only change totals above — so partner expenses always appear.
+  const recentList = useMemo(() => {
+    return [...householdExpenses]
+      .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
+      .slice(0, 40);
+  }, [householdExpenses]);
 
   const waterFill = useMemo(() => {
     if (monthlyBudget <= 0) return 0.58;
@@ -151,6 +131,14 @@ export function HomeScreen() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad + 72 }]}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
       >
         <Animated.View entering={FadeInDown.duration(220)} style={styles.header}>
           <View style={styles.headerLeft}>
@@ -166,6 +154,13 @@ export function HomeScreen() {
               {joint!.emoji} Joint account · {joint!.name}
               {joint!.memberCount >= 2 ? ' · shared with partner' : ' · invite partner from Profile'}
             </Text>
+            {(pendingCount > 0 || isSyncing) && (
+              <Text style={styles.syncHint}>
+                {isSyncing
+                  ? 'Syncing shared expenses…'
+                  : `${pendingCount} change${pendingCount > 1 ? 's' : ''} waiting to sync`}
+              </Text>
+            )}
           </View>
         )}
 
@@ -216,8 +211,13 @@ export function HomeScreen() {
         </ScrollView>
 
         <Text style={styles.sectionTitle}>{isJoint ? 'Shared expenses' : 'Recent'}</Text>
+        {isJoint && (
+          <Text style={styles.sectionHint}>
+            Latest from both of you · pull down to refresh
+          </Text>
+        )}
 
-        {filtered.length === 0 ? (
+        {recentList.length === 0 ? (
           <EmptyState
             emoji="💸"
             title={isJoint ? 'Add a shared expense' : 'Add your first expense'}
@@ -228,7 +228,7 @@ export function HomeScreen() {
             }
           />
         ) : (
-          filtered.slice(0, 25).map((expense, i) => (
+          recentList.map((expense, i) => (
             <ExpenseCard
               key={expense.id}
               expense={expense}
@@ -266,7 +266,14 @@ export function HomeScreen() {
         >
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowBudget(false)} />
           <Pressable style={styles.budgetSheet} onPress={e => e.stopPropagation()}>
-            <Text style={styles.budgetTitle}>Monthly Budget</Text>
+            <Text style={styles.budgetTitle}>
+              {isJoint ? 'Shared Monthly Budget' : 'Monthly Budget'}
+            </Text>
+            {isJoint && (
+              <Text style={[styles.date, { marginBottom: Spacing.sm }]}>
+                Same for both partners · changing updates both
+              </Text>
+            )}
             <TextInput
               style={styles.budgetInput}
               value={budgetInput}
@@ -311,6 +318,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       marginBottom: Spacing.md,
     },
     jointBannerText: { ...Typography.caption, color: colors.primaryLight, fontWeight: '700', textAlign: 'center' },
+    syncHint: { ...Typography.small, color: colors.warning, textAlign: 'center', marginTop: 4 },
     heroCard: { borderRadius: Radius.xl, padding: Spacing.lg, marginBottom: Spacing.md, minHeight: 140, overflow: 'hidden' },
     heroLabel: {
       ...Typography.caption,
@@ -338,7 +346,8 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     filterChipActive: { backgroundColor: colors.primary + '33', borderColor: colors.primary },
     filterText: { ...Typography.caption, color: colors.textSecondary },
     filterTextActive: { color: colors.primaryLight, fontWeight: '700' },
-    sectionTitle: { ...Typography.h3, color: colors.text, marginBottom: Spacing.md },
+    sectionTitle: { ...Typography.h2, color: colors.text, marginBottom: Spacing.xs, fontSize: 18 },
+    sectionHint: { ...Typography.caption, color: colors.textMuted, marginBottom: Spacing.md },
     fabRow: {
       position: 'absolute',
       right: Spacing.lg,

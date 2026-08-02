@@ -14,8 +14,9 @@ import { FLOATING_TAB_HEIGHT, FLOATING_TAB_MARGIN } from '../constants/layout';
 
 const TABS = [
   { name: 'Home', emoji: '🏠', label: 'Home' },
+  { name: 'Ask', emoji: '✨', label: 'Ask' },
   { name: 'Analytics', emoji: '📊', label: 'Stats' },
-  { name: 'History', emoji: '📋', label: 'History' },
+  { name: 'History', emoji: '📋', label: 'Log' },
   { name: 'Profile', emoji: '👤', label: 'Profile' },
 ];
 
@@ -43,7 +44,7 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
       >
         {state.routes.map((route, index) => {
           const focused = state.index === index;
-          const tab = TABS[index] ?? TABS[0];
+          const tab = TABS.find(t => t.name === route.name) ?? TABS[0];
 
           return (
             <TabButton
@@ -149,17 +150,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 4,
     borderRadius: Radius.full,
   },
-  activeEmoji: { fontSize: 18 },
-  activeLabel: { ...Typography.small, color: '#FFF', fontWeight: '700' },
+  activeEmoji: { fontSize: 16 },
+  activeLabel: { ...Typography.small, color: '#FFF', fontWeight: '700', fontSize: 11 },
   inactiveTab: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 2,
   },
-  inactiveEmoji: { fontSize: 18 },
-  inactiveLabel: { ...Typography.small, fontSize: 10 },
+  inactiveEmoji: { fontSize: 17 },
+  inactiveLabel: { ...Typography.small, fontSize: 9 },
 });

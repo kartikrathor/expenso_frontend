@@ -34,6 +34,13 @@ export interface Expense {
   date: string;
   createdAt: string;
   inputMethod: 'voice' | 'manual';
+  /** Joint: who logged / paid (for Ask Expenso splits) */
+  createdById?: string;
+  createdByName?: string;
+  paidById?: string;
+  paidByName?: string;
+  groupId?: string;
+  groupName?: string;
 }
 
 export interface ParsedExpenseInput {

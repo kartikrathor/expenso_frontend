@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, Dimensions } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, ScrollView, Dimensions, RefreshControl } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { EmptyState } from '../components/EmptyState';
 import { ThemeToggle } from '../components/ThemeToggle';
@@ -8,9 +8,9 @@ import { formatCurrency, formatCompactCurrency } from '../utils/expenseParser';
 import { Spacing, Typography, Radius } from '../constants/theme';
 import { getTabBarBottomInset } from '../constants/layout';
 import { useTheme } from '../hooks/useTheme';
+import { useHouseholdExpenses } from '../hooks/useHouseholdExpenses';
 import { TimeFilter } from '../types/expense';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useExpenseStore } from '../store/expenseStore';
 import { PieChart, BarChart, LineChart } from 'react-native-gifted-charts';
 
 const FILTERS: { key: TimeFilter; label: string }[] = [
@@ -27,31 +27,26 @@ export function AnalyticsScreen() {
   const { colors } = useTheme();
   const bottomPad = getTabBarBottomInset(insets.bottom);
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const [filter, setFilter] = React.useState<TimeFilter>('month');
+  const [filter, setFilter] = useState<TimeFilter>('month');
 
-  const expenses = useExpenseStore(s => s.expenses);
-  const monthlyBudget = useExpenseStore(s => s.monthlyBudget);
+  const {
+    isJoint,
+    expenses,
+    monthlyBudget,
+    onRefresh,
+    refreshing,
+    getTotal,
+    getCategoryBreakdown,
+    getMerchantBreakdown,
+    getDailySpending,
+    getFiltered,
+  } = useHouseholdExpenses();
 
-  const total = useMemo(
-    () => useExpenseStore.getState().getTotalSpent(filter),
-    [expenses, filter],
-  );
-  const categories = useMemo(
-    () => useExpenseStore.getState().getCategoryBreakdown(filter),
-    [expenses, filter],
-  );
-  const merchants = useMemo(
-    () => useExpenseStore.getState().getMerchantBreakdown(filter),
-    [expenses, filter],
-  );
-  const daily = useMemo(
-    () => useExpenseStore.getState().getDailySpending(filter),
-    [expenses, filter],
-  );
-  const expenseCount = useMemo(
-    () => useExpenseStore.getState().getFilteredExpenses(filter).length,
-    [expenses, filter],
-  );
+  const total = useMemo(() => getTotal(filter), [getTotal, filter, expenses]);
+  const categories = useMemo(() => getCategoryBreakdown(filter), [getCategoryBreakdown, filter, expenses]);
+  const merchants = useMemo(() => getMerchantBreakdown(filter), [getMerchantBreakdown, filter, expenses]);
+  const daily = useMemo(() => getDailySpending(filter), [getDailySpending, filter, expenses]);
+  const expenseCount = useMemo(() => getFiltered(filter).length, [getFiltered, filter, expenses]);
   const hasData = expenseCount > 0;
 
   const pieData = categories.map(c => ({
@@ -75,11 +70,24 @@ export function AnalyticsScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad }]}>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad }]}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
+      >
         <Animated.View entering={FadeInDown.duration(220)} style={styles.titleRow}>
           <View>
             <Text style={styles.title}>Insights 📊</Text>
-            <Text style={styles.subtitle}>Smart breakdown of your spending</Text>
+            <Text style={styles.subtitle}>
+              {isJoint ? 'Shared joint spending' : 'Smart breakdown of your spending'}
+            </Text>
           </View>
           <ThemeToggle />
         </Animated.View>
@@ -101,7 +109,7 @@ export function AnalyticsScreen() {
         ) : (
           <>
             <Animated.View entering={FadeInDown.delay(60).duration(200)} style={styles.totalCard}>
-              <Text style={styles.totalLabel}>Total Spent</Text>
+              <Text style={styles.totalLabel}>{isJoint ? 'Joint Total' : 'Total Spent'}</Text>
               <Text style={styles.totalAmount}>{formatCurrency(total)}</Text>
               <Text style={styles.totalSub}>{expenseCount} transactions</Text>
               {monthlyBudget > 0 && filter === 'month' && (
@@ -254,7 +262,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     borderWidth: 1,
     borderColor: colors.border,
   },
-  chartTitle: { ...Typography.h3, color: colors.text, marginBottom: Spacing.md },
+  chartTitle: { ...Typography.h2, color: colors.text, marginBottom: Spacing.md, fontSize: 18 },
   pieRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
   pieCenter: { ...Typography.bodyBold, color: colors.text },
   legend: { flex: 1, gap: 6 },

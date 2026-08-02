@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,14 +6,12 @@ import {
   FlatList,
   TextInput,
   Pressable,
+  RefreshControl,
 } from 'react-native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
-import { useExpenseStore } from '../store/expenseStore';
-import { useAuthStore } from '../store/authStore';
-import { useJointStore } from '../store/jointStore';
 import { useActivityStore, ActivityItem } from '../store/activityStore';
+import { useHouseholdExpenses } from '../hooks/useHouseholdExpenses';
 import { ExpenseCard } from '../components/ExpenseCard';
 import { EmptyState } from '../components/EmptyState';
 import { ThemeToggle } from '../components/ThemeToggle';
@@ -40,24 +38,11 @@ export function HistoryScreen() {
   const [categoryFilter, setCategoryFilter] = useState<CategoryId | 'all'>('all');
   const [activityFilter, setActivityFilter] = useState<'all' | 'added' | 'edited' | 'deleted'>('all');
 
-  const user = useAuthStore(s => s.user);
-  const joint = useJointStore(s => s.joint);
-  const jointExpenses = useJointStore(s => s.expenses);
-  const loadJoint = useJointStore(s => s.loadJoint);
-  const localExpenses = useExpenseStore(s => s.expenses);
+  const { isJoint, expenses, onRefresh, refreshing } = useHouseholdExpenses();
   const activities = useActivityStore(s => s.activities);
-
-  const isJoint = !!(user && joint);
-  const expenses = isJoint ? jointExpenses : localExpenses;
 
   const { requestDelete, deleteModal } = useDeleteExpense();
   const { requestEdit, editModal } = useEditExpense();
-
-  useFocusEffect(
-    useCallback(() => {
-      if (user) loadJoint();
-    }, [user, loadJoint]),
-  );
 
   const filteredExpenses = useMemo(() => {
     return expenses.filter(e => {
@@ -195,6 +180,14 @@ export function HistoryScreen() {
           contentContainerStyle={{ paddingBottom: bottomPad }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+            />
+          }
           ListEmptyComponent={
             <EmptyState
               emoji="🔍"
@@ -216,6 +209,14 @@ export function HistoryScreen() {
           contentContainerStyle={{ paddingBottom: bottomPad }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+              colors={[colors.primary]}
+            />
+          }
           ListEmptyComponent={
             <EmptyState
               emoji="📝"

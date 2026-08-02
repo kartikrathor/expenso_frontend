@@ -29,6 +29,7 @@ interface ActivityStore {
   activities: ActivityItem[];
   isLoaded: boolean;
   load: () => Promise<void>;
+  clearAll: () => Promise<void>;
   logAdded: (expense: Expense, source?: 'local' | 'joint') => Promise<void>;
   logEdited: (
     before: Expense,
@@ -115,5 +116,10 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
       byName: actorName(),
       source,
     });
+  },
+
+  clearAll: async () => {
+    set({ activities: [] });
+    await AsyncStorage.removeItem(STORAGE_KEY);
   },
 }));
