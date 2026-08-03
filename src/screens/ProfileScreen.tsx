@@ -19,8 +19,18 @@ import { useAuthStore } from '../store/authStore';
 import { useJointStore } from '../store/jointStore';
 import { useExpenseStore } from '../store/expenseStore';
 import { useActivityStore } from '../store/activityStore';
+import { useCategoryStore } from '../store/categoryStore';
+import { clearAskChatHistory } from '../utils/askChatHistory';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { shareInviteViaWhatsApp, shareInviteCode } from '../utils/shareInvite';
+import { CATEGORIES } from '../constants/categories';
+import { SettingsScreen } from './SettingsScreen';
+
+const KEEP_KEYS = new Set([
+  '@expenso_auth_token',
+  '@expenso_auth_user',
+  '@expensewise_theme',
+]);
 
 export function ProfileScreen() {
   const insets = useSafeAreaInsets();
@@ -30,7 +40,7 @@ export function ProfileScreen() {
 
   const user = useAuthStore(s => s.user);
   const logout = useAuthStore(s => s.logout);
-  const deleteAccount = useAuthStore(s => s.deleteAccount);
+  const clearAllData = useAuthStore(s => s.clearAllData);
   const authBusy = useAuthStore(s => s.isBusy);
 
   const joint = useJointStore(s => s.joint);
@@ -45,6 +55,7 @@ export function ProfileScreen() {
   const [inviteCode, setInviteCode] = useState('');
   const [sharing, setSharing] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     if (user) loadJoint();
@@ -84,7 +95,6 @@ export function ProfileScreen() {
 
   const handleLogout = useCallback(async () => {
     await logout();
-    useJointStore.setState({ joint: null, groups: [], expenses: [], outbox: [], pendingCount: 0 });
   }, [logout]);
 
   const handleLeaveJoint = useCallback(() => {
@@ -113,59 +123,92 @@ export function ProfileScreen() {
     );
   }, [leaveJointAccount, clearJointError]);
 
-  const wipeLocalData = useCallback(async () => {
+  const wipeLocalData = useCallback(async (userId: string) => {
+    // Cancel any pending Ask-chat re-save first, then wipe storage + in-memory UI
+    await clearAskChatHistory(userId);
     await useActivityStore.getState().clearAll();
-    await useExpenseStore.getState().clearAllExpenses();
+
+    // Empty personal expenses + budget in memory/cache (cloud already cleared)
+    useExpenseStore.setState({ expenses: [], monthlyBudget: 0 });
+    await AsyncStorage.removeMany([
+      `@expensewise_expenses_${userId}`,
+      `@expensewise_budget_${userId}`,
+      `@expensewise_personal_uploaded_ids_${userId}`,
+      `@expensewise_expenses`,
+      `@expensewise_budget`,
+      `@expenso_ask_chat_${userId}_solo`,
+      `@expenso_ask_chat_${userId}_joint`,
+    ]).catch(() => {});
+    await AsyncStorage.setItem(`@expensewise_budget_${userId}`, '0').catch(() => {});
+
+    useCategoryStore.setState({ all: CATEGORIES, custom: [], isLoaded: false });
+
     const keys = await AsyncStorage.getAllKeys();
-    const wipe = keys.filter(
-      k =>
-        k.startsWith('@expenso_') ||
-        k.startsWith('@expensewise_') ||
-        k.includes('joint'),
-    );
-    if (wipe.length) await AsyncStorage.multiRemove(wipe);
-    useJointStore.setState({
-      joint: null,
-      groups: [],
-      expenses: [],
-      outbox: [],
-      pendingCount: 0,
+    const wipe = keys.filter(k => {
+      if (KEEP_KEYS.has(k)) return false;
+      // Personal data only — do not wipe joint cache / outbox
+      return (
+        k === `@expenso_ask_chat_${userId}_solo` ||
+        k === `@expenso_ask_chat_${userId}_joint` ||
+        k.startsWith(`@expenso_activity_${userId}`) ||
+        k.startsWith('@expenso_activity_') ||
+        k === `@expensewise_expenses_${userId}` ||
+        k === `@expensewise_budget_${userId}` ||
+        k.startsWith(`@expensewise_personal_uploaded`) ||
+        k.startsWith('@expenso_onboarding') ||
+        k.startsWith('@expensewise_onboarding')
+      );
     });
+    if (wipe.length) await AsyncStorage.removeMany(wipe);
+
+    // Refresh joint from server (membership kept — only personal data wiped)
+    await useJointStore.getState().loadJoint();
+    await useCategoryStore.getState().loadCategories();
   }, []);
 
   const handleDeleteAllData = useCallback(() => {
     Alert.alert(
       'Delete all my data?',
-      'This permanently deletes your account, local expenses, activity, and leaves any joint account. This cannot be undone.',
+      'This permanently deletes your personal expenses, budget, activity, and Ask chat history. Your login account stays. Joint account membership is kept.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete everything',
+          text: 'Delete my data',
           style: 'destructive',
           onPress: () => {
-            Alert.alert('Are you sure?', 'Confirm delete account and all cloud + local data.', [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Yes, delete',
-                style: 'destructive',
-                onPress: async () => {
-                  setActionBusy(true);
-                  try {
-                    await deleteAccount();
-                    await wipeLocalData();
-                  } catch (err: any) {
-                    Alert.alert('Delete failed', err?.message || 'Try again');
-                  } finally {
-                    setActionBusy(false);
-                  }
+            Alert.alert(
+              'Are you sure?',
+              'Account login will remain. Only your data will be wiped. This cannot be undone.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Yes, clear data',
+                  style: 'destructive',
+                  onPress: async () => {
+                    if (!user?.id) return;
+                    setActionBusy(true);
+                    try {
+                      await clearAllData();
+                      await wipeLocalData(user.id);
+                      setTimeout(() => {
+                        Alert.alert('Done', 'All your data was cleared. You are still logged in.');
+                      }, 250);
+                    } catch (err: any) {
+                      setTimeout(() => {
+                        Alert.alert('Clear failed', err?.message || 'Try again');
+                      }, 250);
+                    } finally {
+                      setActionBusy(false);
+                    }
+                  },
                 },
-              },
-            ]);
+              ],
+            );
           },
         },
       ],
     );
-  }, [deleteAccount, wipeLocalData]);
+  }, [clearAllData, wipeLocalData, user?.id]);
 
   if (!user) {
     return (
@@ -212,6 +255,21 @@ export function ProfileScreen() {
             <Text style={styles.logoutText}>Logout</Text>
           </Pressable>
         </View>
+
+        <Pressable
+          style={styles.settingsBtn}
+          onPress={() => setSettingsOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Open settings"
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.settingsTitle}>Settings</Text>
+            <Text style={styles.settingsSub}>
+              App lock · Export · Feedback · Share
+            </Text>
+          </View>
+          <Text style={styles.settingsChevron}>›</Text>
+        </Pressable>
 
         <Text style={styles.sectionTitle}>💑 Joint Account</Text>
         <Text style={styles.sectionHint}>
@@ -339,7 +397,7 @@ export function ProfileScreen() {
 
         <Text style={[styles.sectionTitle, { marginTop: Spacing.lg }]}>Danger zone</Text>
         <Text style={styles.sectionHint}>
-          Permanently remove your account and data from Expenso.
+          Clear expenses, budget, activity, and Ask history — your login stays.
         </Text>
         <View style={styles.card}>
           <Pressable
@@ -354,10 +412,13 @@ export function ProfileScreen() {
             )}
           </Pressable>
           <Text style={styles.dangerHint}>
-            Deletes account, cloud joint data you own, local expenses & activity. Cannot be undone.
+            Removes personal expenses, budget, activity & Ask chat. Account login is kept. Cannot be
+            undone.
           </Text>
         </View>
       </ScrollView>
+
+      <SettingsScreen visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </View>
   );
 }
@@ -442,6 +503,20 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       backgroundColor: colors.danger + '18',
     },
     logoutText: { ...Typography.caption, color: colors.danger, fontWeight: '700' },
+    settingsBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderRadius: Radius.xl,
+      padding: Spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: Spacing.lg,
+      gap: Spacing.md,
+    },
+    settingsTitle: { ...Typography.bodyBold, color: colors.text },
+    settingsSub: { ...Typography.caption, color: colors.textMuted, marginTop: 2 },
+    settingsChevron: { fontSize: 28, color: colors.textMuted, fontWeight: '300', marginTop: -2 },
     sectionTitle: { ...Typography.h3, color: colors.text, marginBottom: Spacing.xs },
     sectionHint: {
       ...Typography.caption,

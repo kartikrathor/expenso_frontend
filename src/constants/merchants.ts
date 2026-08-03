@@ -8,6 +8,8 @@ export interface MerchantConfig {
   color: string;
   bgColor: string;
   iconLetter: string;
+  /** Absolute URL to brand logo (from API /uploads or CDN) */
+  iconUrl?: string;
 }
 
 export const MERCHANTS: MerchantConfig[] = [
@@ -140,6 +142,18 @@ export const DEFAULT_MERCHANT: MerchantConfig = {
   iconLetter: '₹',
 };
 
+/** Active catalog — prefers API-loaded list when available */
+let runtimeMerchants: MerchantConfig[] = MERCHANTS;
+
+export function setRuntimeMerchants(list: MerchantConfig[]) {
+  runtimeMerchants = list.length ? list : MERCHANTS;
+}
+
+export function getMerchantsCatalog(): MerchantConfig[] {
+  return runtimeMerchants.length ? runtimeMerchants : MERCHANTS;
+}
+
 export function getMerchantConfig(id: MerchantId): MerchantConfig {
-  return MERCHANTS.find(m => m.id === id) ?? DEFAULT_MERCHANT;
+  if (id === 'default') return DEFAULT_MERCHANT;
+  return getMerchantsCatalog().find(m => m.id === id) ?? DEFAULT_MERCHANT;
 }

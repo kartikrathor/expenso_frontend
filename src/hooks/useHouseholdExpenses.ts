@@ -22,6 +22,11 @@ async function syncLocalIntoJointOnce() {
   const joint = useJointStore.getState().joint;
   if (!joint) return;
 
+  const userId = useAuthStore.getState().user?.id;
+  const localOwner = useExpenseStore.getState().activeUserId;
+  // Never push another account's leftover locals into this joint group.
+  if (!userId || !localOwner || localOwner !== userId) return;
+
   const flagKey = `@expenso_local_synced_${joint.id}`;
   const idsKey = `@expenso_local_synced_ids_${joint.id}`;
   const done = await AsyncStorage.getItem(flagKey);
@@ -74,6 +79,7 @@ export function useHouseholdExpenses() {
   const localBudget = useExpenseStore(s => s.monthlyBudget);
   const loadJoint = useJointStore(s => s.loadJoint);
   const flushOutbox = useJointStore(s => s.flushOutbox);
+  const refreshPersonal = useExpenseStore(s => s.refreshFromServer);
   const pendingCount = useJointStore(s => s.pendingCount);
   const isSyncing = useJointStore(s => s.isSyncing);
   const setJointBudget = useJointStore(s => s.setMonthlyBudget);
@@ -96,11 +102,13 @@ export function useHouseholdExpenses() {
       if (useJointStore.getState().joint) {
         await syncLocalIntoJointOnce();
         await flushOutbox();
+      } else {
+        await refreshPersonal();
       }
     } finally {
       refreshLock.current = false;
     }
-  }, [user, loadJoint, flushOutbox]);
+  }, [user, loadJoint, flushOutbox, refreshPersonal]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

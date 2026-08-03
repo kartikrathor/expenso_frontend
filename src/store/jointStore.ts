@@ -72,6 +72,7 @@ type OutboxItem =
         merchant?: MerchantId;
         category?: CategoryId;
         note?: string;
+        date?: string;
       };
       attempts: number;
     }
@@ -99,7 +100,7 @@ interface JointStore {
   loadJointExpenses: () => Promise<void>;
   setMonthlyBudget: (amount: number) => Promise<void>;
   syncBudgetWithLocal: () => Promise<void>;
-  addJointExpense: (data: CreatePayload) => Promise<void>;
+  addJointExpense: (data: CreatePayload) => Promise<Expense>;
   deleteJointExpense: (id: string) => Promise<void>;
   updateJointExpense: (
     id: string,
@@ -109,6 +110,7 @@ interface JointStore {
       merchant?: MerchantId;
       category?: CategoryId;
       note?: string;
+      date?: string;
     },
   ) => Promise<void>;
   flushOutbox: () => Promise<void>;
@@ -116,6 +118,8 @@ interface JointStore {
   getTotal: (filter: TimeFilter) => number;
   getTodayTotal: () => number;
   clearError: () => void;
+  /** Clear in-memory joint state on logout / account switch */
+  resetSession: () => Promise<void>;
 }
 
 function authToken(): string | null {
@@ -461,7 +465,7 @@ export const useJointStore = create<JointStore>((set, get) => ({
         timeoutMs: 25000,
       });
       try {
-        await AsyncStorage.multiRemove([
+        await AsyncStorage.removeMany([
           cacheKey(joint.id),
           outboxKey(joint.id),
           `@expenso_local_synced_${joint.id}`,
@@ -574,6 +578,7 @@ export const useJointStore = create<JointStore>((set, get) => ({
     await persistCache(joint.id, expenses);
     await persistOutbox(joint.id, outbox);
     await get().flushOutbox();
+    return local;
   },
 
   deleteJointExpense: async id => {
@@ -618,8 +623,8 @@ export const useJointStore = create<JointStore>((set, get) => ({
     );
     if (createItem) {
       createItem.payload = { ...createItem.payload, ...changes };
-      const expenses = get().expenses.map(e =>
-        e.id === id ? { ...e, ...changes } : e,
+      const expenses = sortNewest(
+        get().expenses.map(e => (e.id === id ? { ...e, ...changes } : e)),
       );
       const outbox = get().outbox.map(i =>
         i.id === createItem.id ? { ...createItem } : i,
@@ -631,8 +636,8 @@ export const useJointStore = create<JointStore>((set, get) => ({
       return;
     }
 
-    const expenses = get().expenses.map(e =>
-      e.id === id ? { ...e, ...changes } : e,
+    const expenses = sortNewest(
+      get().expenses.map(e => (e.id === id ? { ...e, ...changes } : e)),
     );
     const item: OutboxItem = {
       id: generateId(),
@@ -701,8 +706,10 @@ export const useJointStore = create<JointStore>((set, get) => ({
               body: {
                 amount: item.changes.amount,
                 merchantLabel: item.changes.merchantLabel,
+                merchant: item.changes.merchant,
                 category: item.changes.category,
                 note: item.changes.note,
+                date: item.changes.date,
               },
             });
             fetchSeq += 1;
@@ -771,4 +778,17 @@ export const useJointStore = create<JointStore>((set, get) => ({
       .reduce((s, e) => s + e.amount, 0),
 
   clearError: () => set({ error: null }),
+
+  resetSession: async () => {
+    set({
+      joint: null,
+      groups: [],
+      expenses: [],
+      outbox: [],
+      pendingCount: 0,
+      isBusy: false,
+      isSyncing: false,
+      error: null,
+    });
+  },
 }));

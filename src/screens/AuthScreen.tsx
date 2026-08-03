@@ -148,12 +148,15 @@ export function AuthScreen() {
             styles.scroll,
             keyboardOpen && styles.scrollKeyboardOpen,
             {
-              // Android uses adjustResize — avoid stacking full keyboard height.
+              // adjustNothing: pad by keyboard height on Android; iOS uses KAV + partial pad.
               paddingBottom:
                 Spacing.lg +
                 insets.bottom +
-                (Platform.OS === 'ios' && keyboardOpen ? keyboardHeight * 0.35 : 0) +
-                (keyboardOpen ? Spacing.xl : 0),
+                (keyboardOpen
+                  ? Platform.OS === 'android'
+                    ? keyboardHeight
+                    : keyboardHeight * 0.35 + Spacing.xl
+                  : 0),
             },
           ]}
           keyboardShouldPersistTaps="handled"

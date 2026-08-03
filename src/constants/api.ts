@@ -4,34 +4,35 @@ import { NativeModules, Platform } from 'react-native';
 export const PROD_API_BASE_URL = 'https://expenso-backend-f61z.onrender.com';
 
 /**
- * Android: prefer 127.0.0.1 after `adb reverse tcp:4000 tcp:4000`
- * iOS simulator: localhost
+ * Optional: Mac Wi‑Fi IP for wireless debugging (phone + Mac same network).
+ * Leave empty when using USB — then 127.0.0.1 + `adb reverse` is used.
+ * Find IP: `ipconfig getifaddr en0`
  */
+const DEV_LAN_HOST = '';
+
 const DEV_HOST =
   Platform.OS === 'android'
-    ? '127.0.0.1' // requires: adb reverse tcp:4000 tcp:4000
+    ? DEV_LAN_HOST || '127.0.0.1'
     : 'localhost';
 
 export const API_PORT = 4000;
 export const DEV_API_BASE_URL = `http://${DEV_HOST}:${API_PORT}`;
 
 /**
- * Android release: URL comes from Gradle BuildConfig (assembleRelease).
- * Fallback: __DEV__ ? local : Render.
+ * In __DEV__, prefer JS URL (Metro reload) over Gradle BuildConfig.
+ * Release builds still use BuildConfig / Render.
  */
 const nativeApiBaseUrl: string | undefined = NativeModules.ApiConfig?.apiBaseUrl;
 
-export const API_BASE_URL =
-  typeof nativeApiBaseUrl === 'string' && nativeApiBaseUrl.length > 0
+export const API_BASE_URL = __DEV__
+  ? DEV_API_BASE_URL
+  : typeof nativeApiBaseUrl === 'string' && nativeApiBaseUrl.length > 0
     ? nativeApiBaseUrl
-    : __DEV__
-      ? DEV_API_BASE_URL
-      : PROD_API_BASE_URL;
+    : PROD_API_BASE_URL;
 
 /** Shown in error messages */
-export const API_HINT =
-  API_BASE_URL.includes('onrender.com')
-    ? 'Check your internet. Free Render may take ~30s to wake.'
-    : Platform.OS === 'android'
-      ? 'Run: adb reverse tcp:4000 tcp:4000'
-      : 'Make sure server is on port 4000';
+export const API_HINT = API_BASE_URL.includes('onrender.com')
+  ? 'Check your internet. Free Render may take ~30s to wake.'
+  : Platform.OS === 'android'
+    ? 'USB: run `npm run adb:api` then reopen app. Wi‑Fi: set DEV_LAN_HOST in api.ts'
+    : 'Make sure server is on port 4000';

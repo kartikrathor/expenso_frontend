@@ -3,18 +3,19 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "android": "adb reverse tcp:4000 tcp:4000 || true; react-native run-android",
+    "android": "adb reverse tcp:4000 tcp:4000 || true; adb reverse tcp:8081 tcp:8081 || true; react-native run-android",
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest",
     "postinstall": "patch-package",
     "server": "npm --prefix ../expenso_backend run dev",
-    "adb:api": "adb reverse tcp:4000 tcp:4000"
+    "adb:api": "adb reverse tcp:4000 tcp:4000 && adb reverse tcp:8081 tcp:8081 && echo 'API tunnel: device:4000 -> Mac:4000'"
   },
   "dependencies": {
     "@dbkable/react-native-speech-to-text": "^1.0.0",
     "@react-native-async-storage/async-storage": "^3.1.1",
+    "@react-native-clipboard/clipboard": "^1.16.3",
     "@react-native/new-app-screen": "0.86.2",
     "@react-navigation/bottom-tabs": "^7.18.14",
     "@react-navigation/native": "^7.3.14",
@@ -22,6 +23,7 @@
     "date-fns": "^4.4.0",
     "react": "19.2.3",
     "react-native": "0.86.2",
+    "react-native-biometrics": "^3.0.1",
     "react-native-gesture-handler": "^3.1.0",
     "react-native-gifted-charts": "^1.4.77",
     "react-native-haptic-feedback": "^3.0.0",

@@ -36,7 +36,11 @@ export function AppNavigator() {
         }}
       >
         <Tab.Screen name="Home" component={HomeScreen} />
-        <Tab.Screen name="Ask" component={AskScreen} />
+        <Tab.Screen
+          name="Ask"
+          component={AskScreen}
+          options={{ lazy: false }}
+        />
         <Tab.Screen name="Analytics" component={AnalyticsScreen} />
         <Tab.Screen name="History" component={HistoryScreen} />
         <Tab.Screen name="Profile" component={ProfileScreen} />

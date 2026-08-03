@@ -23,10 +23,14 @@ import Animated, {
 import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CategoryId, MerchantId } from '../types/expense';
-import { MERCHANTS, DEFAULT_MERCHANT, getMerchantConfig } from '../constants/merchants';
+import { DEFAULT_MERCHANT, getMerchantConfig } from '../constants/merchants';
 import { CATEGORIES, getCategoryConfig } from '../constants/categories';
+import { useCategoryStore } from '../store/categoryStore';
+import { useMerchantStore } from '../store/merchantStore';
 import { MerchantIcon } from './MerchantIcon';
+import { CategoryGlyph, CategoryIcon } from './CategoryIcon';
 import { VoiceButton } from './VoiceButton';
+import { ExpenseDatePicker } from './ExpenseDatePicker';
 import { parseExpenseText } from '../utils/expenseParser';
 import { Spacing, Typography, Radius } from '../constants/theme';
 import { useTheme } from '../hooks/useTheme';
@@ -42,6 +46,8 @@ export interface ExpenseSaveData {
   category: CategoryId;
   note: string;
   inputMethod: 'voice' | 'manual';
+  /** ISO date — defaults to now when omitted by callers */
+  date: string;
 }
 
 interface AddExpenseModalProps {
@@ -66,8 +72,15 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
   const [selectedMerchant, setSelectedMerchant] = useState<MerchantId>('default');
   const [selectedCategory, setSelectedCategory] = useState<CategoryId>('other');
   const [parsed, setParsed] = useState<ReturnType<typeof parseExpenseText> | null>(null);
+  const [newCategoryLabel, setNewCategoryLabel] = useState('');
+  const [addingCategory, setAddingCategory] = useState(false);
+  const categoryOptions = useCategoryStore(s => (s.all.length ? s.all : CATEGORIES));
+  const addCustomCategory = useCategoryStore(s => s.addCustomCategory);
+  const loadCategories = useCategoryStore(s => s.loadCategories);
+  const merchantOptions = useMerchantStore(s => s.all);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString());
   const saveScale = useSharedValue(1);
 
   const reset = useCallback(() => {
@@ -79,15 +92,19 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
     setSelectedMerchant('default');
     setSelectedCategory('other');
     setParsed(null);
+    setNewCategoryLabel('');
     setSaving(false);
+    setExpenseDate(new Date().toISOString());
   }, []);
 
   useEffect(() => {
     if (!visible) {
       reset();
       Keyboard.dismiss();
+    } else {
+      loadCategories();
     }
-  }, [visible, reset]);
+  }, [visible, reset, loadCategories]);
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -110,6 +127,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
     if (!data.amount || data.amount <= 0) return;
     Keyboard.dismiss();
     setParsed(data);
+    setExpenseDate(new Date().toISOString());
     setStep('confirm');
     ReactNativeHapticFeedback.trigger('impactLight');
   }, []);
@@ -171,6 +189,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
         category: parsed.category,
         note: parsed.note,
         inputMethod: tab === 'voice' ? 'voice' : 'manual',
+        date: expenseDate,
       });
       ReactNativeHapticFeedback.trigger('impactMedium');
       onClose();
@@ -201,16 +220,22 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
           style={styles.confirmGlow}
         >
           <View style={styles.confirmIcon}>
-            <MerchantIcon merchantId={parsed.merchant} size={68} />
+            {parsed.merchant === 'default' ? (
+              <CategoryIcon categoryId={parsed.category} size={68} />
+            ) : (
+              <MerchantIcon merchantId={parsed.merchant} size={68} />
+            )}
           </View>
           <Text style={styles.confirmAmount}>₹{(parsed.amount ?? 0).toLocaleString('en-IN')}</Text>
           <Text style={styles.confirmMerchant}>{parsed.merchantLabel}</Text>
           <View style={[styles.confirmBadge, { backgroundColor: cat.color + '22' }]}>
-            <Text>{cat.emoji}</Text>
+            <CategoryGlyph categoryId={parsed.category} size={14} color={cat.color} />
             <Text style={[styles.confirmBadgeText, { color: cat.color }]}>{cat.label}</Text>
           </View>
           {parsed.note ? <Text style={styles.confirmNote}>"{parsed.note}"</Text> : null}
         </LinearGradient>
+
+        <ExpenseDatePicker valueIso={expenseDate} onChange={setExpenseDate} />
 
         <Pressable style={styles.confirmBtn} onPress={confirmSave} disabled={saving}>
           <LinearGradient
@@ -439,7 +464,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                       />
                       <Text style={styles.label}>Merchant</Text>
                       <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-                        {[DEFAULT_MERCHANT, ...MERCHANTS].map(m => (
+                        {[DEFAULT_MERCHANT, ...merchantOptions].map(m => (
                           <Pressable
                             key={m.id}
                             style={[styles.merchantChip, selectedMerchant === m.id && styles.merchantChipActive]}
@@ -457,18 +482,45 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                       </ScrollView>
                       <Text style={styles.label}>Category</Text>
                       <View style={styles.categoryGrid}>
-                        {CATEGORIES.map(c => (
+                        {categoryOptions.map(c => (
                           <Pressable
                             key={c.id}
                             style={[styles.categoryChip, selectedCategory === c.id && { borderColor: c.color, backgroundColor: c.color + '22' }]}
                             onPress={() => setSelectedCategory(c.id)}
                           >
-                            <Text>{c.emoji}</Text>
+                            <CategoryGlyph categoryId={c.id} size={16} color={selectedCategory === c.id ? c.color : undefined} />
                             <Text style={[styles.categoryChipText, selectedCategory === c.id && { color: c.color }]}>
                               {c.label}
                             </Text>
                           </Pressable>
                         ))}
+                      </View>
+                      <View style={styles.addCatRow}>
+                        <TextInput
+                          style={[styles.input, { flex: 1 }]}
+                          value={newCategoryLabel}
+                          onChangeText={setNewCategoryLabel}
+                          placeholder="New category (e.g. Pets)"
+                          placeholderTextColor={colors.textMuted}
+                        />
+                        <Pressable
+                          style={[styles.quickChip, addingCategory && { opacity: 0.5 }]}
+                          disabled={addingCategory || !newCategoryLabel.trim()}
+                          onPress={async () => {
+                            setAddingCategory(true);
+                            try {
+                              const created = await addCustomCategory(newCategoryLabel.trim());
+                              setSelectedCategory(created.id);
+                              setNewCategoryLabel('');
+                            } catch (err: any) {
+                              showAlert('Category', err?.message || 'Could not add', undefined, '⚠️');
+                            } finally {
+                              setAddingCategory(false);
+                            }
+                          }}
+                        >
+                          <Text style={styles.quickChipText}>{addingCategory ? '…' : '+ Add'}</Text>
+                        </Pressable>
                       </View>
                       <Pressable
                         style={[styles.saveBtn, !amount && styles.saveBtnDisabled]}
@@ -656,6 +708,12 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       flexWrap: 'wrap',
       gap: Spacing.sm,
       marginVertical: Spacing.sm,
+    },
+    addCatRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
+      marginBottom: Spacing.sm,
     },
     categoryChip: {
       flexDirection: 'row',

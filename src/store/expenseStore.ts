@@ -1,7 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
-import { Expense, TimeFilter } from '../types/expense';
-import { generateId } from '../utils/generateId';
+import { Expense, MerchantId, TimeFilter, CategoryId } from '../types/expense';
 import {
   startOfWeek,
   startOfMonth,
@@ -11,15 +10,33 @@ import {
   isWithinInterval,
   isToday,
 } from 'date-fns';
+import { sortByNewest } from '../utils/expenseAnalytics';
+import { apiRequest } from '../services/api';
+import { useAuthStore } from './authStore';
 
-const STORAGE_KEY = '@expensewise_expenses';
-const BUDGET_KEY = '@expensewise_budget';
+function expensesKey(userId: string) {
+  return `@expensewise_expenses_${userId}`;
+}
+function budgetKey(userId: string) {
+  return `@expensewise_budget_${userId}`;
+}
+function uploadedIdsKey(userId: string) {
+  return `@expensewise_personal_uploaded_ids_${userId}`;
+}
+
+const LEGACY_EXPENSES_KEY = '@expensewise_expenses';
+const LEGACY_BUDGET_KEY = '@expensewise_budget';
+const MONGO_ID_RE = /^[a-f0-9]{24}$/i;
 
 interface ExpenseStore {
   expenses: Expense[];
   monthlyBudget: number;
   isLoaded: boolean;
+  activeUserId: string | null;
+  isSyncing: boolean;
   loadExpenses: () => Promise<void>;
+  loadForUser: (userId: string | null) => Promise<void>;
+  refreshFromServer: () => Promise<void>;
   clearAllExpenses: () => Promise<void>;
   setMonthlyBudget: (amount: number) => Promise<void>;
   addExpense: (expense: Omit<Expense, 'id' | 'createdAt'>) => Promise<Expense>;
@@ -36,6 +53,18 @@ interface ExpenseStore {
   getDailySpending: (filter: TimeFilter) => { label: string; value: number }[];
 }
 
+type ServerExpense = {
+  _id: string;
+  amount: number;
+  merchantLabel: string;
+  merchant?: string;
+  category?: string;
+  note?: string;
+  date: string | Date;
+  inputMethod?: 'voice' | 'manual';
+  createdAt?: string | Date;
+};
+
 const CATEGORY_COLORS: Record<string, string> = {
   food: '#F472B6',
   groceries: '#10B981',
@@ -47,6 +76,17 @@ const CATEGORY_COLORS: Record<string, string> = {
   other: '#94A3B8',
 };
 
+const CATEGORIES: CategoryId[] = [
+  'food',
+  'groceries',
+  'shopping',
+  'transport',
+  'entertainment',
+  'bills',
+  'health',
+  'other',
+];
+
 function getFilterDate(filter: TimeFilter): Date | null {
   const now = new Date();
   switch (filter) {
@@ -57,80 +97,364 @@ function getFilterDate(filter: TimeFilter): Date | null {
   }
 }
 
-async function persist(expenses: Expense[]) {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
+function authToken(): string | null {
+  return useAuthStore.getState().token;
+}
+
+function toExpense(raw: ServerExpense): Expense {
+  const cat = CATEGORIES.includes(raw.category as CategoryId)
+    ? (raw.category as CategoryId)
+    : 'other';
+  const date = typeof raw.date === 'string' ? raw.date : new Date(raw.date).toISOString();
+  const createdAt = raw.createdAt
+    ? typeof raw.createdAt === 'string'
+      ? raw.createdAt
+      : new Date(raw.createdAt).toISOString()
+    : date;
+  return {
+    id: raw._id,
+    amount: raw.amount,
+    merchant: (raw.merchant as MerchantId) || 'default',
+    merchantLabel: raw.merchantLabel,
+    category: cat,
+    note: raw.note || '',
+    date,
+    createdAt,
+    inputMethod: raw.inputMethod === 'voice' ? 'voice' : 'manual',
+  };
+}
+
+async function persistCache(userId: string | null, expenses: Expense[], budget: number) {
+  if (!userId) return;
+  await AsyncStorage.setItem(expensesKey(userId), JSON.stringify(expenses));
+  await AsyncStorage.setItem(budgetKey(userId), String(budget));
+}
+
+async function readCache(userId: string): Promise<{ expenses: Expense[]; monthlyBudget: number }> {
+  try {
+    const raw = await AsyncStorage.getItem(expensesKey(userId));
+    const budgetRaw = await AsyncStorage.getItem(budgetKey(userId));
+    return {
+      expenses: raw ? JSON.parse(raw) : [],
+      monthlyBudget: budgetRaw ? parseFloat(budgetRaw) || 0 : 0,
+    };
+  } catch {
+    return { expenses: [], monthlyBudget: 0 };
+  }
+}
+
+function expenseFingerprint(e: {
+  amount: number;
+  merchantLabel: string;
+  date: string;
+  note?: string;
+}): string {
+  const day = (e.date || '').slice(0, 10);
+  return `${e.amount}|${(e.merchantLabel || '').trim().toLowerCase()}|${day}|${(e.note || '').trim()}`;
+}
+
+function isLocalOnlyId(id: string): boolean {
+  return !MONGO_ID_RE.test(id);
+}
+
+/** User-scoped cache + old device-wide legacy key (if still present). */
+async function collectLocalCandidates(userId: string): Promise<{
+  expenses: Expense[];
+  monthlyBudget: number;
+}> {
+  const cached = await readCache(userId);
+  const byFp = new Map<string, Expense>();
+  for (const e of cached.expenses) {
+    byFp.set(expenseFingerprint(e), e);
+  }
+
+  let legacyBudget = 0;
+  try {
+    const legacyRaw = await AsyncStorage.getItem(LEGACY_EXPENSES_KEY);
+    if (legacyRaw) {
+      const list: Expense[] = JSON.parse(legacyRaw);
+      for (const e of list) {
+        const fp = expenseFingerprint(e);
+        if (!byFp.has(fp)) byFp.set(fp, e);
+      }
+    }
+    const lb = await AsyncStorage.getItem(LEGACY_BUDGET_KEY);
+    if (lb) legacyBudget = parseFloat(lb) || 0;
+  } catch {
+    /* ignore bad legacy */
+  }
+
+  return {
+    expenses: [...byFp.values()],
+    monthlyBudget: cached.monthlyBudget > 0 ? cached.monthlyBudget : legacyBudget,
+  };
+}
+
+/**
+ * Automatically push any device-cached personal expenses that are not yet on the server.
+ * Dedupes by amount + merchant + day + note so pull/refresh won't create duplicates.
+ */
+async function syncLocalCacheToServer(userId: string, token: string): Promise<number> {
+  const local = await collectLocalCandidates(userId);
+  let uploadedCount = 0;
+
+  let uploadedIds: string[] = [];
+  try {
+    uploadedIds = JSON.parse((await AsyncStorage.getItem(uploadedIdsKey(userId))) || '[]');
+  } catch {
+    uploadedIds = [];
+  }
+  const uploaded = new Set(uploadedIds);
+
+  const remote = await apiRequest<{ expenses: ServerExpense[] }>('/api/expenses', { token });
+  const remoteList = remote.expenses || [];
+  const remoteIds = new Set(remoteList.map(e => e._id));
+  const remoteFps = new Set(remoteList.map(e => expenseFingerprint(toExpense(e))));
+
+  for (const e of local.expenses) {
+    if (uploaded.has(e.id)) continue;
+    if (!isLocalOnlyId(e.id) && remoteIds.has(e.id)) {
+      uploaded.add(e.id);
+      continue;
+    }
+    const fp = expenseFingerprint(e);
+    if (remoteFps.has(fp)) {
+      uploaded.add(e.id);
+      continue;
+    }
+
+    try {
+      await apiRequest('/api/expenses', {
+        method: 'POST',
+        token,
+        body: {
+          amount: e.amount,
+          merchantLabel: e.merchantLabel,
+          merchant: e.merchant,
+          category: e.category,
+          note: e.note,
+          date: e.date,
+          inputMethod: e.inputMethod,
+        },
+      });
+      uploaded.add(e.id);
+      remoteFps.add(fp);
+      uploadedCount += 1;
+      await AsyncStorage.setItem(uploadedIdsKey(userId), JSON.stringify([...uploaded]));
+    } catch {
+      // Retry on next login / refresh
+      await AsyncStorage.setItem(uploadedIdsKey(userId), JSON.stringify([...uploaded]));
+      return uploadedCount;
+    }
+  }
+
+  await AsyncStorage.setItem(uploadedIdsKey(userId), JSON.stringify([...uploaded]));
+
+  // Push personal budget if we have one and server is still 0
+  try {
+    const budgetRes = await apiRequest<{ monthlyBudget: number }>('/api/expenses/budget', { token });
+    const serverBudget = budgetRes.monthlyBudget ?? 0;
+    if (local.monthlyBudget > 0 && serverBudget <= 0) {
+      await apiRequest('/api/expenses/budget', {
+        method: 'PATCH',
+        token,
+        body: { monthlyBudget: local.monthlyBudget },
+      });
+    }
+  } catch {
+    /* budget optional */
+  }
+
+  // Legacy keys consumed — avoid re-reading forever
+  if (local.expenses.length > 0 || local.monthlyBudget > 0) {
+    await AsyncStorage.removeItem(LEGACY_EXPENSES_KEY);
+    await AsyncStorage.removeItem(LEGACY_BUDGET_KEY);
+  }
+
+  return uploadedCount;
 }
 
 export const useExpenseStore = create<ExpenseStore>((set, get) => ({
   expenses: [],
   monthlyBudget: 0,
   isLoaded: false,
+  activeUserId: null,
+  isSyncing: false,
 
   loadExpenses: async () => {
+    set({ isLoaded: true });
+  },
+
+  loadForUser: async (userId) => {
+    if (!userId) {
+      set({
+        expenses: [],
+        monthlyBudget: 0,
+        isLoaded: true,
+        activeUserId: null,
+        isSyncing: false,
+      });
+      return;
+    }
+
+    set({ isLoaded: false, activeUserId: userId });
+    const localBundle = await collectLocalCandidates(userId);
+    set({
+      expenses: sortByNewest(localBundle.expenses),
+      monthlyBudget: localBundle.monthlyBudget,
+      isLoaded: true,
+      activeUserId: userId,
+    });
+
+    const token = authToken();
+    if (!token) return;
+
+    set({ isSyncing: true });
     try {
-      const raw = await AsyncStorage.getItem(STORAGE_KEY);
-      const budgetRaw = await AsyncStorage.getItem(BUDGET_KEY);
-      const expenses: Expense[] = raw ? JSON.parse(raw) : [];
-      const monthlyBudget = budgetRaw ? parseFloat(budgetRaw) : 0;
-      set({ expenses, monthlyBudget, isLoaded: true });
+      // Show cache first, then push any unsynced local/legacy rows, then pull server truth.
+      await syncLocalCacheToServer(userId, token);
+
+      const [listRes, budgetRes] = await Promise.all([
+        apiRequest<{ expenses: ServerExpense[] }>('/api/expenses', { token }),
+        apiRequest<{ monthlyBudget: number }>('/api/expenses/budget', { token }),
+      ]);
+
+      const expenses = sortByNewest((listRes.expenses || []).map(toExpense));
+      const monthlyBudget = budgetRes.monthlyBudget ?? 0;
+      set({ expenses, monthlyBudget, isSyncing: false });
+      await persistCache(userId, expenses, monthlyBudget);
     } catch {
-      set({ expenses: [], monthlyBudget: 0, isLoaded: true });
+      // Keep cache if offline / server down
+      set({ isSyncing: false });
+    }
+  },
+
+  refreshFromServer: async () => {
+    const userId = get().activeUserId;
+    const token = authToken();
+    if (!userId || !token) return;
+    set({ isSyncing: true });
+    try {
+      await syncLocalCacheToServer(userId, token);
+      const [listRes, budgetRes] = await Promise.all([
+        apiRequest<{ expenses: ServerExpense[] }>('/api/expenses', { token }),
+        apiRequest<{ monthlyBudget: number }>('/api/expenses/budget', { token }),
+      ]);
+      const expenses = sortByNewest((listRes.expenses || []).map(toExpense));
+      const monthlyBudget = budgetRes.monthlyBudget ?? 0;
+      set({ expenses, monthlyBudget, isSyncing: false });
+      await persistCache(userId, expenses, monthlyBudget);
+    } catch {
+      set({ isSyncing: false });
     }
   },
 
   clearAllExpenses: async () => {
+    const userId = get().activeUserId;
+    const token = authToken();
+    const current = [...get().expenses];
     set({ expenses: [] });
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify([]));
+    if (userId) await persistCache(userId, [], get().monthlyBudget);
+    if (token) {
+      for (const e of current) {
+        try {
+          await apiRequest(`/api/expenses/${e.id}`, { method: 'DELETE', token });
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   },
 
   setMonthlyBudget: async (amount) => {
-    await AsyncStorage.setItem(BUDGET_KEY, String(amount));
+    const userId = get().activeUserId;
+    const token = authToken();
     set({ monthlyBudget: amount });
+    if (userId) await AsyncStorage.setItem(budgetKey(userId), String(amount));
+    if (token) {
+      await apiRequest('/api/expenses/budget', {
+        method: 'PATCH',
+        token,
+        body: { monthlyBudget: amount },
+      });
+    }
   },
 
   addExpense: async (data) => {
-    const expense: Expense = {
-      ...data,
-      id: generateId(),
-      createdAt: new Date().toISOString(),
-    };
-    const expenses = [expense, ...get().expenses];
-    await persist(expenses);
+    const token = authToken();
+    const userId = get().activeUserId;
+    if (!token || !userId) {
+      throw new Error('Not logged in');
+    }
+
+    const res = await apiRequest<{ expense: ServerExpense }>('/api/expenses', {
+      method: 'POST',
+      token,
+      body: {
+        amount: data.amount,
+        merchantLabel: data.merchantLabel,
+        merchant: data.merchant,
+        category: data.category,
+        note: data.note,
+        date: data.date,
+        inputMethod: data.inputMethod,
+      },
+    });
+
+    const expense = toExpense(res.expense);
+    const expenses = sortByNewest([expense, ...get().expenses]);
     set({ expenses });
+    await persistCache(userId, expenses, get().monthlyBudget);
     return expense;
   },
 
   updateExpense: async (id, changes) => {
-    const expenses = get().expenses.map(e =>
-      e.id === id ? { ...e, ...changes } : e,
+    const token = authToken();
+    const userId = get().activeUserId;
+    if (!token || !userId) throw new Error('Not logged in');
+
+    const res = await apiRequest<{ expense: ServerExpense }>(`/api/expenses/${id}`, {
+      method: 'PATCH',
+      token,
+      body: changes,
+    });
+
+    const updated = toExpense(res.expense);
+    const expenses = sortByNewest(
+      get().expenses.map(e => (e.id === id ? updated : e)),
     );
-    await persist(expenses);
     set({ expenses });
+    await persistCache(userId, expenses, get().monthlyBudget);
   },
 
   deleteExpense: async (id) => {
+    const token = authToken();
+    const userId = get().activeUserId;
+    if (!token || !userId) throw new Error('Not logged in');
+
+    await apiRequest(`/api/expenses/${id}`, { method: 'DELETE', token });
     const expenses = get().expenses.filter(e => e.id !== id);
-    await persist(expenses);
     set({ expenses });
+    await persistCache(userId, expenses, get().monthlyBudget);
   },
 
   deleteExpensesByYear: async (year) => {
-    const before = get().expenses.length;
-    const expenses = get().expenses.filter(e => parseISO(e.date).getFullYear() !== year);
-    await persist(expenses);
-    set({ expenses });
-    return before - expenses.length;
+    const toDelete = get().expenses.filter(e => parseISO(e.date).getFullYear() === year);
+    for (const e of toDelete) {
+      await get().deleteExpense(e.id);
+    }
+    return toDelete.length;
   },
 
   deleteExpensesByMonth: async (year, month) => {
-    const before = get().expenses.length;
-    const expenses = get().expenses.filter(e => {
+    const toDelete = get().expenses.filter(e => {
       const d = parseISO(e.date);
-      return !(d.getFullYear() === year && d.getMonth() + 1 === month);
+      return d.getFullYear() === year && d.getMonth() + 1 === month;
     });
-    await persist(expenses);
-    set({ expenses });
-    return before - expenses.length;
+    for (const e of toDelete) {
+      await get().deleteExpense(e.id);
+    }
+    return toDelete.length;
   },
 
   deleteOldestEntries: async (count) => {
@@ -139,11 +463,11 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     const sorted = [...get().expenses].sort(
       (a, b) => parseISO(a.date).getTime() - parseISO(b.date).getTime(),
     );
-    const toRemove = new Set(sorted.slice(0, Math.min(count, sorted.length)).map(e => e.id));
-    const expenses = get().expenses.filter(e => !toRemove.has(e.id));
-    await persist(expenses);
-    set({ expenses });
-    return before - expenses.length;
+    const victims = sorted.slice(0, Math.min(count, sorted.length));
+    for (const e of victims) {
+      await get().deleteExpense(e.id);
+    }
+    return victims.length;
   },
 
   getFilteredExpenses: (filter) => {

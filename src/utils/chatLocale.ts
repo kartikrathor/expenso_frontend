@@ -7,16 +7,24 @@ const HI_ROMAN = [
   'kab', 'nahi', 'haan', 'matlab', 'thoda', 'zyadaa', 'kam',
 ];
 
-/** Detect reply language from latest user text. Default English. */
+/** Scripts we can detect but don't ship native replies for yet → English UI. */
+const UNSUPPORTED_SCRIPTS =
+  /[\u0B80-\u0BFF\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F\u0980-\u09FF\u0A80-\u0AFF\u0A00-\u0A7F\u0B00-\u0B7F]/;
+
+/**
+ * Detect reply language from latest user text.
+ * Supported: English + Hindi. Other Indic scripts → English chips/UI
+ * (server still answers in English with a notice).
+ */
 export function detectChatLang(text: string): ChatLang {
   const t = (text || '').trim();
   if (!t) return 'en';
+  if (UNSUPPORTED_SCRIPTS.test(t)) return 'en';
   if (/[\u0900-\u097F]/.test(t)) return 'hi'; // Devanagari
   const lower = t.toLowerCase().replace(/[^\p{L}\s]/gu, ' ');
   const tokens = lower.split(/\s+/).filter(Boolean);
   if (!tokens.length) return 'en';
   const hiHits = tokens.filter(w => HI_ROMAN.includes(w)).length;
-  // Need a clear Hindi/Hinglish signal; otherwise stay English
   if (hiHits >= 2 || (hiHits >= 1 && tokens.length <= 4)) return 'hi';
   return 'en';
 }

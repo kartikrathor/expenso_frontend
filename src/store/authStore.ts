@@ -23,6 +23,8 @@ interface AuthStore {
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   deleteAccount: () => Promise<void>;
+  /** Wipe expenses / cloud personal data — keeps login */
+  clearAllData: () => Promise<void>;
   clearError: () => void;
 }
 
@@ -97,6 +99,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
   logout: async () => {
     await clearSession();
     set({ user: null, token: null, error: null });
+    // Session stores cleared by App.tsx when user becomes null
   },
 
   deleteAccount: async () => {
@@ -113,6 +116,23 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       set({ user: null, token: null, isBusy: false, error: null });
     } catch (err: any) {
       set({ isBusy: false, error: err?.message || 'Could not delete account' });
+      throw err;
+    }
+  },
+
+  clearAllData: async () => {
+    const token = get().token;
+    if (!token) throw new Error('Not logged in');
+    set({ isBusy: true, error: null });
+    try {
+      await apiRequest('/api/auth/me/data', {
+        method: 'DELETE',
+        token,
+        timeoutMs: 30000,
+      });
+      set({ isBusy: false, error: null });
+    } catch (err: any) {
+      set({ isBusy: false, error: err?.message || 'Could not clear data' });
       throw err;
     }
   },

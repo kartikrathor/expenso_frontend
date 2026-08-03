@@ -37,6 +37,8 @@
 	<string></string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Expenso needs microphone access for voice expense entry in Hindi and English.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Expenso uses Face ID to unlock the app securely.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Expenso uses speech recognition to understand your expense details.</string>
 	<key>RCTNewArchEnabled</key>

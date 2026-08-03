@@ -3,8 +3,13 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CategoryId, Expense } from '../types/expense';
 import { useAuthStore } from './authStore';
 
-const STORAGE_KEY = '@expenso_activity_v1';
+const LEGACY_KEY = '@expenso_activity_v1';
+const MIGRATED_FLAG = '@expenso_activity_migrated_to';
 const MAX_ITEMS = 500;
+
+function activityKey(userId: string) {
+  return `@expenso_activity_v1_${userId}`;
+}
 
 export type ActivityType = 'added' | 'edited' | 'deleted';
 
@@ -28,12 +33,14 @@ export interface ActivityItem {
 interface ActivityStore {
   activities: ActivityItem[];
   isLoaded: boolean;
+  activeUserId: string | null;
   load: () => Promise<void>;
+  loadForUser: (userId: string | null) => Promise<void>;
   clearAll: () => Promise<void>;
   logAdded: (expense: Expense, source?: 'local' | 'joint') => Promise<void>;
   logEdited: (
     before: Expense,
-    after: Partial<Pick<Expense, 'amount' | 'merchantLabel' | 'category' | 'note'>>,
+    after: Partial<Pick<Expense, 'amount' | 'merchantLabel' | 'category' | 'note' | 'date'>>,
     source?: 'local' | 'joint',
   ) => Promise<void>;
   logDeleted: (expense: Expense, source?: 'local' | 'joint') => Promise<void>;
@@ -47,26 +54,53 @@ function generateId(): string {
   return `act_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-async function persist(activities: ActivityItem[]) {
-  await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(activities));
+async function persist(activities: ActivityItem[], userId: string | null) {
+  if (!userId) return;
+  await AsyncStorage.setItem(activityKey(userId), JSON.stringify(activities));
 }
 
 function push(get: () => ActivityStore, set: (p: Partial<ActivityStore>) => void, item: ActivityItem) {
   const activities = [item, ...get().activities].slice(0, MAX_ITEMS);
   set({ activities });
-  void persist(activities);
+  void persist(activities, get().activeUserId);
 }
 
 export const useActivityStore = create<ActivityStore>((set, get) => ({
   activities: [],
   isLoaded: false,
+  activeUserId: null,
 
   load: async () => {
+    set({ isLoaded: true });
+  },
+
+  loadForUser: async (userId) => {
+    if (!userId) {
+      set({ activities: [], isLoaded: true, activeUserId: null });
+      return;
+    }
+
+    set({ isLoaded: false, activeUserId: userId });
     try {
-      const raw = await AsyncStorage.getItem(STORAGE_KEY);
-      set({ activities: raw ? JSON.parse(raw) : [], isLoaded: true });
+      let raw = await AsyncStorage.getItem(activityKey(userId));
+      if (!raw) {
+        const migratedTo = await AsyncStorage.getItem(MIGRATED_FLAG);
+        if (!migratedTo) {
+          // Legacy activity was not user-scoped — discard to avoid cross-account leak.
+          await AsyncStorage.removeItem(LEGACY_KEY);
+          await AsyncStorage.setItem(MIGRATED_FLAG, userId);
+        }
+      } else {
+        const migratedTo = await AsyncStorage.getItem(MIGRATED_FLAG);
+        if (!migratedTo) await AsyncStorage.setItem(MIGRATED_FLAG, userId);
+      }
+      set({
+        activities: raw ? JSON.parse(raw) : [],
+        isLoaded: true,
+        activeUserId: userId,
+      });
     } catch {
-      set({ activities: [], isLoaded: true });
+      set({ activities: [], isLoaded: true, activeUserId: userId });
     }
   },
 
@@ -119,7 +153,8 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
   },
 
   clearAll: async () => {
+    const userId = get().activeUserId;
     set({ activities: [] });
-    await AsyncStorage.removeItem(STORAGE_KEY);
+    if (userId) await AsyncStorage.removeItem(activityKey(userId));
   },
 }));

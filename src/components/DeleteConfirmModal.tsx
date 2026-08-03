@@ -13,6 +13,7 @@ import { format, parseISO } from 'date-fns';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
 import { Expense } from '../types/expense';
 import { MerchantIcon } from './MerchantIcon';
+import { CategoryIcon, CategoryGlyph } from './CategoryIcon';
 import { getCategoryConfig } from '../constants/categories';
 import { formatCurrency } from '../utils/expenseParser';
 import { Spacing, Typography, Radius } from '../constants/theme';
@@ -236,7 +237,11 @@ export function DeleteConfirmModal({
                   ]}
                 >
                   <View style={[styles.previewIcon, { borderColor: category.color + '55' }]}>
-                    <MerchantIcon merchantId={displayExpense.merchant} size={52} />
+                    {!displayExpense.merchant || displayExpense.merchant === 'default' ? (
+                      <CategoryIcon categoryId={displayExpense.category} size={52} />
+                    ) : (
+                      <MerchantIcon merchantId={displayExpense.merchant} size={52} />
+                    )}
                   </View>
                   <View style={styles.previewContent}>
                     <Text style={styles.previewMerchant} numberOfLines={1}>
@@ -249,7 +254,7 @@ export function DeleteConfirmModal({
                       <View
                         style={[styles.categoryBadge, { backgroundColor: category.color + '22' }]}
                       >
-                        <Text style={styles.categoryEmoji}>{category.emoji}</Text>
+                        <CategoryGlyph categoryId={displayExpense.category} size={13} color={category.color} />
                         <Text style={[styles.categoryText, { color: category.color }]}>
                           {category.label}
                         </Text>

@@ -1,28 +1,6 @@
-export type MerchantId =
-  | 'blinkit'
-  | 'zepto'
-  | 'amazon'
-  | 'flipkart'
-  | 'swiggy'
-  | 'zomato'
-  | 'myntra'
-  | 'uber'
-  | 'ola'
-  | 'netflix'
-  | 'spotify'
-  | 'paytm'
-  | 'phonepe'
-  | 'default';
+export type MerchantId = string;
 
-export type CategoryId =
-  | 'food'
-  | 'groceries'
-  | 'shopping'
-  | 'transport'
-  | 'entertainment'
-  | 'bills'
-  | 'health'
-  | 'other';
+export type CategoryId = string;
 
 export interface Expense {
   id: string;

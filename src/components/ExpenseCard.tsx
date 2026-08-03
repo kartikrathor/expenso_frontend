@@ -1,13 +1,5 @@
-import React, { useCallback, useMemo, useRef } from 'react';
+import React, { memo, useCallback, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
-import Animated, {
-  FadeInDown,
-  FadeOut,
-  LinearTransition,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from 'react-native-reanimated';
 import Swipeable, {
   type SwipeableMethods,
 } from 'react-native-gesture-handler/ReanimatedSwipeable';
@@ -15,20 +7,26 @@ import LinearGradient from 'react-native-linear-gradient';
 import Svg, { Path } from 'react-native-svg';
 import { Expense } from '../types/expense';
 import { MerchantIcon } from './MerchantIcon';
+import { CategoryIcon, CategoryGlyph } from './CategoryIcon';
 import { getCategoryConfig } from '../constants/categories';
 import { formatCurrency } from '../utils/expenseParser';
 import { Radius, Spacing, Typography } from '../constants/theme';
 import { useTheme } from '../hooks/useTheme';
 import { format, parseISO } from 'date-fns';
+import { useCategoryStore } from '../store/categoryStore';
+import { useSwipeEnabledSV } from '../hooks/useSwipeScrollLock';
+
+/** Approximate row height (card + margin) — useful for FlatList tuning. */
+export const EXPENSE_CARD_ROW_HEIGHT = 90;
 
 interface ExpenseCardProps {
   expense: Expense;
-  index: number;
+  index?: number;
   onDelete?: (id: string) => void;
   onEdit?: (id: string) => void;
+  /** When true, show only time (use under a day section heading). */
+  timeOnly?: boolean;
 }
-
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 function EditIcon({ size = 20, color = '#FFF' }: { size?: number; color?: string }) {
   return (
@@ -84,16 +82,31 @@ function TrashIcon({ size = 22, color = '#FFF' }: { size?: number; color?: strin
   );
 }
 
-export function ExpenseCard({ expense, index, onDelete, onEdit }: ExpenseCardProps) {
+export const ExpenseCard = memo(function ExpenseCard({
+  expense,
+  onDelete,
+  onEdit,
+  timeOnly,
+}: ExpenseCardProps) {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const scale = useSharedValue(1);
   const swipeableRef = useRef<SwipeableMethods>(null);
-  const category = getCategoryConfig(expense.category);
+  const swipeEnabled = useSwipeEnabledSV();
+  const getCat = useCategoryStore(s => s.getConfig);
+  const category = getCat(expense.category) || getCategoryConfig(expense.category);
+  const showCategoryAvatar = !expense.merchant || expense.merchant === 'default';
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
+  const dateLabel = useMemo(() => {
+    try {
+      const formatted = format(
+        parseISO(expense.date),
+        timeOnly ? 'hh:mm a' : 'dd MMM, hh:mm a',
+      );
+      return expense.inputMethod === 'voice' ? `${formatted}  🎤` : formatted;
+    } catch {
+      return '';
+    }
+  }, [expense.date, expense.inputMethod, timeOnly]);
 
   const handleDeletePress = useCallback(() => {
     swipeableRef.current?.close();
@@ -112,8 +125,8 @@ export function ExpenseCard({ expense, index, onDelete, onEdit }: ExpenseCardPro
   const deleteGradient = useMemo(
     () =>
       isDark
-        ? ['#FB7185', '#E11D48']
-        : ['#F87171', '#DC2626'],
+        ? (['#FB7185', '#E11D48'] as const)
+        : (['#F87171', '#DC2626'] as const),
     [isDark],
   );
 
@@ -121,7 +134,7 @@ export function ExpenseCard({ expense, index, onDelete, onEdit }: ExpenseCardPro
     () => (
       <Pressable style={styles.deleteWrap} onPress={handleDeletePress}>
         <LinearGradient
-          colors={deleteGradient}
+          colors={[...deleteGradient]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.deleteAction}
@@ -158,53 +171,47 @@ export function ExpenseCard({ expense, index, onDelete, onEdit }: ExpenseCardPro
   return (
     <Swipeable
       ref={swipeableRef}
+      enabled={swipeEnabled ?? true}
       renderRightActions={onDelete ? renderRightActions : undefined}
       renderLeftActions={onEdit ? renderLeftActions : undefined}
       overshootRight={false}
       overshootLeft={false}
-      friction={2}
+      friction={2.4}
+      dragOffsetFromLeft={28}
+      dragOffsetFromRight={-28}
     >
-      <Animated.View
-        entering={FadeInDown.delay(Math.min(index * 30, 180)).duration(220)}
-        exiting={FadeOut.duration(160)}
-        layout={LinearTransition.duration(200)}
-        style={styles.cardWrapper}
+      <Pressable
+        style={styles.card}
+        onLongPress={onDelete ? handleDeletePress : undefined}
+        delayLongPress={400}
       >
-        <AnimatedPressable
-          style={[styles.card, animatedStyle]}
-          onPressIn={() => { scale.value = withSpring(0.98); }}
-          onPressOut={() => { scale.value = withSpring(1); }}
-          onLongPress={onDelete ? handleDeletePress : undefined}
-          delayLongPress={400}
-        >
-          <View style={[styles.iconRing, { borderColor: category.color + '44' }]}>
+        <View style={[styles.iconRing, { borderColor: category.color + '44' }]}>
+          {showCategoryAvatar ? (
+            <CategoryIcon categoryId={expense.category} size={46} />
+          ) : (
             <MerchantIcon merchantId={expense.merchant} size={46} />
+          )}
+        </View>
+        <View style={styles.content}>
+          <View style={styles.row}>
+            <Text style={styles.merchant} numberOfLines={1}>{expense.merchantLabel}</Text>
+            <Text style={styles.amount}>{formatCurrency(expense.amount)}</Text>
           </View>
-          <View style={styles.content}>
-            <View style={styles.row}>
-              <Text style={styles.merchant} numberOfLines={1}>{expense.merchantLabel}</Text>
-              <Text style={styles.amount}>{formatCurrency(expense.amount)}</Text>
+          <View style={styles.row}>
+            <View style={[styles.categoryBadge, { backgroundColor: category.color + '18' }]}>
+              <CategoryGlyph categoryId={expense.category} size={13} color={category.color} />
+              <Text style={[styles.categoryText, { color: category.color }]}>{category.label}</Text>
             </View>
-            <View style={styles.row}>
-              <View style={[styles.categoryBadge, { backgroundColor: category.color + '18' }]}>
-                <Text style={styles.categoryEmoji}>{category.emoji}</Text>
-                <Text style={[styles.categoryText, { color: category.color }]}>{category.label}</Text>
-              </View>
-              <Text style={styles.date}>
-                {format(parseISO(expense.date), 'dd MMM, hh:mm a')}
-                {expense.inputMethod === 'voice' ? '  🎤' : ''}
-              </Text>
-            </View>
+            <Text style={styles.date}>{dateLabel}</Text>
           </View>
-        </AnimatedPressable>
-      </Animated.View>
+        </View>
+      </Pressable>
     </Swipeable>
   );
-}
+});
 
 function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
-    cardWrapper: { marginBottom: Spacing.sm },
     card: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -214,6 +221,8 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderWidth: 1,
       borderColor: colors.border,
       gap: Spacing.md,
+      marginBottom: Spacing.sm,
+      minHeight: EXPENSE_CARD_ROW_HEIGHT - Spacing.sm,
     },
     iconRing: { borderRadius: Radius.md, borderWidth: 1.5, padding: 2 },
     content: { flex: 1 },
@@ -222,9 +231,8 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     amount: { ...Typography.bodyBold, color: colors.text, fontSize: 17 },
     categoryBadge: {
       flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.sm,
-      paddingVertical: 3, borderRadius: Radius.full, gap: 4,
+      paddingVertical: 3, borderRadius: Radius.full, gap: 5,
     },
-    categoryEmoji: { fontSize: 12 },
     categoryText: { ...Typography.small, fontWeight: '600' },
     date: { ...Typography.small, color: colors.textMuted },
     deleteWrap: {

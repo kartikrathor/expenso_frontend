@@ -142,6 +142,7 @@ export function HoldMicFab({ onSave }: HoldMicFabProps) {
           category: parsed.category,
           note: trimmed,
           inputMethod: 'voice',
+          date: new Date().toISOString(),
         });
         haptic('notificationSuccess');
       } catch {

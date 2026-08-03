@@ -1,4 +1,4 @@
-import { MERCHANTS, DEFAULT_MERCHANT } from '../constants/merchants';
+import { DEFAULT_MERCHANT, getMerchantsCatalog } from '../constants/merchants';
 import { CategoryId, MerchantId, ParsedExpenseInput } from '../types/expense';
 
 const HINDI_NUMBERS: Record<string, number> = {
@@ -56,9 +56,11 @@ const CATEGORY_KEYWORDS: { keywords: string[]; category: CategoryId }[] = [
   {
     keywords: [
       'pizza', 'burger', 'restaurant', 'cafe', 'coffee', 'tea', 'chai', 'food', 'meal',
-      'lunch', 'dinner', 'breakfast', 'biryani', 'dosa', 'thali', 'noodles', 'roll',
+      'lunch', 'dinner', 'breakfast', 'biryani', 'dosa', 'idli', 'thali', 'noodles', 'roll',
       'sandwich', 'juice', 'smoothie', 'bakery', 'eat', 'dine', 'snack', 'maggi',
-      'dhaba', 'hotel', 'bar', 'pub', 'ccd', 'starbucks', 'subway',
+      'dhaba', 'hotel', 'bar', 'pub', 'ccd', 'starbucks', 'subway', 'momos', 'momo',
+      'shawarma', 'samosa', 'paratha', 'roti', 'pasta', 'tiffin', 'khana', 'nashta',
+      'dominos', 'mcdonalds', 'kfc', 'icecream', 'ice cream',
     ],
     category: 'food',
   },
@@ -66,7 +68,7 @@ const CATEGORY_KEYWORDS: { keywords: string[]; category: CategoryId }[] = [
     keywords: [
       'grocery', 'groceries', 'sabzi', 'vegetable', 'fruit', 'milk', 'bread', 'egg',
       'rice', 'dal', 'atta', 'flour', 'oil', 'supermarket', 'kirana', 'bazaar',
-      'market', 'reliance fresh', 'dmart', 'big bazaar', 'more', 'spencers',
+      'market', 'reliance fresh', 'dmart', 'big bazaar', 'more', 'spencers', 'doodh', 'ration',
     ],
     category: 'groceries',
   },
@@ -95,9 +97,10 @@ const CATEGORY_KEYWORDS: { keywords: string[]; category: CategoryId }[] = [
   },
   {
     keywords: [
-      'electricity', 'water bill', 'gas bill', 'internet', 'broadband', 'wifi',
+      'electricity', 'water bill', 'gas bill', 'gas', 'light', 'light bill', 'bijli',
+      'current', 'current bill', 'lpg', 'cylinder', 'indane', 'internet', 'broadband', 'wifi',
       'recharge', 'mobile', 'phone bill', 'dth', 'cable', 'emi', 'rent', 'insurance',
-      'loan', 'bill', 'utility', 'airtel', 'jio', 'vi', 'vodafone', 'bsnl',
+      'loan', 'bill', 'utility', 'airtel', 'jio', 'vi', 'vodafone', 'bsnl', 'maintenance',
     ],
     category: 'bills',
   },
@@ -105,14 +108,29 @@ const CATEGORY_KEYWORDS: { keywords: string[]; category: CategoryId }[] = [
     keywords: [
       'medicine', 'medical', 'doctor', 'hospital', 'clinic', 'pharmacy', 'chemist',
       'health', 'apollo', 'netmeds', '1mg', 'medplus', 'tablet', 'injection',
-      'pathology', 'lab test', 'blood test', 'scan', 'xray', 'dental', 'gym',
+      'pathology', 'lab test', 'blood test', 'scan', 'xray', 'dental', 'gym', 'dawai',
     ],
     category: 'health',
   },
 ];
 
+/** Remote learned terms (longest match wins) */
+let learnedTerms: Array<{ term: string; category: CategoryId }> = [];
+
+export function setLearnedCategoryTerms(map: Record<string, string>) {
+  learnedTerms = Object.entries(map || {})
+    .filter(([term, cat]) => term && cat)
+    .map(([term, category]) => ({ term: term.toLowerCase(), category }))
+    .sort((a, b) => b.term.length - a.term.length);
+}
+
 function detectCategoryFromKeywords(text: string): CategoryId | null {
   const lower = text.toLowerCase();
+
+  for (const { term, category } of learnedTerms) {
+    if (lower.includes(term)) return category;
+  }
+
   for (const { keywords, category } of CATEGORY_KEYWORDS) {
     if (keywords.some(k => lower.includes(k))) return category;
   }
@@ -125,7 +143,8 @@ function detectMerchant(text: string): { id: MerchantId; label: string; category
     if (normalized.includes(alias)) normalized = normalized.replace(alias, id);
   }
 
-  for (const merchant of MERCHANTS) {
+  const catalog = getMerchantsCatalog();
+  for (const merchant of catalog) {
     for (const keyword of merchant.keywords) {
       if (normalized.includes(keyword.toLowerCase())) {
         return { id: merchant.id, label: merchant.label, category: merchant.category };
@@ -152,9 +171,9 @@ export function parseExpenseText(text: string): ParsedExpenseInput {
       .trim();
   }
 
-  for (const m of MERCHANTS) {
+  for (const m of getMerchantsCatalog()) {
     for (const kw of m.keywords) {
-      note = note.replace(new RegExp(kw, 'gi'), '').trim();
+      note = note.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '').trim();
     }
   }
 

@@ -15,9 +15,12 @@ import Animated, { Easing, SlideInDown, FadeIn } from 'react-native-reanimated';
 import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Expense, CategoryId, MerchantId } from '../types/expense';
-import { MERCHANTS, DEFAULT_MERCHANT, getMerchantConfig } from '../constants/merchants';
+import { DEFAULT_MERCHANT, getMerchantConfig } from '../constants/merchants';
 import { CATEGORIES, getCategoryConfig } from '../constants/categories';
+import { useMerchantStore } from '../store/merchantStore';
 import { MerchantIcon } from './MerchantIcon';
+import { CategoryGlyph, CategoryIcon } from './CategoryIcon';
+import { ExpenseDatePicker } from './ExpenseDatePicker';
 import { Spacing, Typography, Radius } from '../constants/theme';
 import { useTheme } from '../hooks/useTheme';
 import { formatCurrency } from '../utils/expenseParser';
@@ -33,6 +36,7 @@ interface EditExpenseModalProps {
     merchant: MerchantId;
     category: CategoryId;
     note: string;
+    date: string;
   }) => Promise<void> | void;
 }
 
@@ -40,12 +44,14 @@ export function EditExpenseModal({ visible, expense, onClose, onSave }: EditExpe
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const merchantOptions = useMerchantStore(s => s.all);
 
   const [amount, setAmount] = useState('');
   const [merchantLabel, setMerchantLabel] = useState('');
   const [selectedMerchant, setSelectedMerchant] = useState<MerchantId>('default');
   const [selectedCategory, setSelectedCategory] = useState<CategoryId>('other');
   const [note, setNote] = useState('');
+  const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString());
   const [saving, setSaving] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
@@ -57,6 +63,7 @@ export function EditExpenseModal({ visible, expense, onClose, onSave }: EditExpe
       setSelectedMerchant(expense.merchant);
       setSelectedCategory(expense.category);
       setNote(expense.note ?? '');
+      setExpenseDate(expense.date || new Date().toISOString());
       setSaving(false);
     }
   }, [expense]);
@@ -89,13 +96,14 @@ export function EditExpenseModal({ visible, expense, onClose, onSave }: EditExpe
         merchant: selectedMerchant,
         category: selectedCategory,
         note: note.trim(),
+        date: expenseDate,
       });
       ReactNativeHapticFeedback.trigger('notificationSuccess', { enableVibrateFallback: true, ignoreAndroidSystemSettings: false });
       onClose();
     } catch {
       setSaving(false);
     }
-  }, [expense, saving, amount, merchantLabel, selectedMerchant, selectedCategory, note, onSave, onClose]);
+  }, [expense, saving, amount, merchantLabel, selectedMerchant, selectedCategory, note, expenseDate, onSave, onClose]);
 
   const sheetPaddingBottom = Math.max(
     keyboardHeight > 0 ? keyboardHeight - insets.bottom + Spacing.sm : insets.bottom + Spacing.lg,
@@ -137,15 +145,19 @@ export function EditExpenseModal({ visible, expense, onClose, onSave }: EditExpe
             {/* Current expense preview pill */}
             {expense && (
               <Animated.View entering={FadeIn.duration(180)} style={styles.previewPill}>
-                <MerchantIcon merchantId={expense.merchant} size={36} />
+                {expense.merchant === 'default' ? (
+                  <CategoryIcon categoryId={selectedCategory} size={36} />
+                ) : (
+                  <MerchantIcon merchantId={expense.merchant} size={36} />
+                )}
                 <View style={styles.previewText}>
                   <Text style={styles.previewAmount}>{formatCurrency(expense.amount)}</Text>
                   <Text style={styles.previewMerchant} numberOfLines={1}>{expense.merchantLabel}</Text>
                 </View>
-                <View style={[styles.previewBadge, { backgroundColor: cat.color + '22' }]}>
-                  <Text style={styles.previewBadgeEmoji}>{cat.emoji}</Text>
-                  <Text style={[styles.previewBadgeText, { color: cat.color }]}>{cat.label}</Text>
-                </View>
+                  <View style={[styles.previewBadge, { backgroundColor: cat.color + '22' }]}>
+                    <CategoryGlyph categoryId={selectedCategory} size={13} color={cat.color} />
+                    <Text style={[styles.previewBadgeText, { color: cat.color }]}>{cat.label}</Text>
+                  </View>
               </Animated.View>
             )}
 
@@ -191,10 +203,13 @@ export function EditExpenseModal({ visible, expense, onClose, onSave }: EditExpe
                 returnKeyType="done"
               />
 
+              {/* Date */}
+              <ExpenseDatePicker valueIso={expenseDate} onChange={setExpenseDate} label="Date" />
+
               {/* Merchant picker */}
               <Text style={styles.label}>Merchant Icon</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.merchantRow}>
-                {[DEFAULT_MERCHANT, ...MERCHANTS].map(m => (
+                {[DEFAULT_MERCHANT, ...merchantOptions].map(m => (
                   <Pressable
                     key={m.id}
                     style={[styles.merchantChip, selectedMerchant === m.id && styles.merchantChipActive]}
@@ -223,7 +238,7 @@ export function EditExpenseModal({ visible, expense, onClose, onSave }: EditExpe
                     ]}
                     onPress={() => setSelectedCategory(c.id)}
                   >
-                    <Text>{c.emoji}</Text>
+                    <CategoryGlyph categoryId={c.id} size={16} color={selectedCategory === c.id ? c.color : undefined} />
                     <Text style={[styles.categoryChipText, selectedCategory === c.id && { color: c.color, fontWeight: '700' }]}>
                       {c.label}
                     </Text>

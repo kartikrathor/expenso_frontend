@@ -24,6 +24,7 @@ import { Spacing, Typography, Radius } from '../constants/theme';
 import { useTheme } from '../hooks/useTheme';
 import { AddExpenseModal, ExpenseSaveData } from '../components/AddExpenseModal';
 import { ExpenseCard } from '../components/ExpenseCard';
+import { AddExpenseHeroIcon } from '../components/icons/AddExpenseHeroIcon';
 import { useExpenseStore } from '../store/expenseStore';
 import { Expense } from '../types/expense';
 
@@ -59,7 +60,7 @@ export function OnboardingScreen({ onDone }: OnboardingScreenProps) {
   // ----- Handlers -----
   const handleSaveExpense = useCallback(
     async (data: ExpenseSaveData) => {
-      const saved = await addExpense({ ...data, date: new Date().toISOString() });
+      const saved = await addExpense({ ...data, date: data.date });
       setAddedExpense(saved);
       setShowAddModal(false);
       setStep('swipe');
@@ -204,7 +205,7 @@ export function OnboardingScreen({ onDone }: OnboardingScreenProps) {
     <Animated.View entering={FadeInDown.duration(380)} style={styles.stepWrap}>
       <View style={styles.stepIconWrap}>
         <LinearGradient colors={[colors.gradientStart, colors.gradientEnd]} style={styles.stepIcon}>
-          <Text style={styles.stepIconEmoji}>➕</Text>
+          <AddExpenseHeroIcon size={42} color="#FFF" />
         </LinearGradient>
       </View>
       <Text style={styles.stepTitle}>Add Your First Expense</Text>

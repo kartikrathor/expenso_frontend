@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   FlatList,
+  SectionList,
   TextInput,
   Pressable,
   RefreshControl,
@@ -15,6 +16,7 @@ import { useHouseholdExpenses } from '../hooks/useHouseholdExpenses';
 import { ExpenseCard } from '../components/ExpenseCard';
 import { EmptyState } from '../components/EmptyState';
 import { ThemeToggle } from '../components/ThemeToggle';
+import { ExpenseDatePicker } from '../components/ExpenseDatePicker';
 import { CATEGORIES, getCategoryConfig } from '../constants/categories';
 import { Spacing, Typography, Radius } from '../constants/theme';
 import { getTabBarBottomInset } from '../constants/layout';
@@ -22,10 +24,26 @@ import { useTheme } from '../hooks/useTheme';
 import { useDeleteExpense } from '../hooks/useDeleteExpense';
 import { useEditExpense } from '../hooks/useEditExpense';
 import { formatCurrency } from '../utils/expenseParser';
-import { CategoryId } from '../types/expense';
+import { CategoryId, Expense } from '../types/expense';
 import { format, parseISO } from 'date-fns';
+import { SwipeScrollLockGate } from '../hooks/useSwipeScrollLock';
+import {
+  HistoryPeriod,
+  applyCalendarDay,
+  filterByHistoryPeriod,
+  formatPeriodAnchor,
+  groupExpensesByDay,
+  shiftPeriodAnchor,
+} from '../utils/expenseDate';
 
 type Tab = 'expenses' | 'activity';
+
+const PERIODS: { id: HistoryPeriod; label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'day', label: 'Day' },
+  { id: 'month', label: 'Month' },
+  { id: 'year', label: 'Year' },
+];
 
 export function HistoryScreen() {
   const insets = useSafeAreaInsets();
@@ -37,6 +55,8 @@ export function HistoryScreen() {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<CategoryId | 'all'>('all');
   const [activityFilter, setActivityFilter] = useState<'all' | 'added' | 'edited' | 'deleted'>('all');
+  const [period, setPeriod] = useState<HistoryPeriod>('all');
+  const [periodAnchor, setPeriodAnchor] = useState(() => new Date());
 
   const { isJoint, expenses, onRefresh, refreshing } = useHouseholdExpenses();
   const activities = useActivityStore(s => s.activities);
@@ -45,7 +65,8 @@ export function HistoryScreen() {
   const { requestEdit, editModal } = useEditExpense();
 
   const filteredExpenses = useMemo(() => {
-    return expenses.filter(e => {
+    const byPeriod = filterByHistoryPeriod(expenses, period, periodAnchor);
+    return byPeriod.filter(e => {
       const matchesSearch =
         !search ||
         e.merchantLabel.toLowerCase().includes(search.toLowerCase()) ||
@@ -54,7 +75,9 @@ export function HistoryScreen() {
       const matchesCategory = categoryFilter === 'all' || e.category === categoryFilter;
       return matchesSearch && matchesCategory;
     });
-  }, [expenses, search, categoryFilter]);
+  }, [expenses, search, categoryFilter, period, periodAnchor]);
+
+  const sections = useMemo(() => groupExpensesByDay(filteredExpenses), [filteredExpenses]);
 
   const filteredActivity = useMemo(() => {
     return activities.filter(a => {
@@ -78,7 +101,7 @@ export function HistoryScreen() {
             <Text style={styles.title}>History 📋</Text>
             <Text style={styles.subtitle}>
               {tab === 'expenses'
-                ? `${expenses.length} active · ${isJoint ? 'Joint' : 'Personal'}`
+                ? `${filteredExpenses.length} shown · ${expenses.length} total · ${isJoint ? 'Joint' : 'Personal'}`
                 : `${activities.length} activity logs`}
             </Text>
           </View>
@@ -118,25 +141,74 @@ export function HistoryScreen() {
       </View>
 
       {tab === 'expenses' ? (
-        <FlatList
-          horizontal
-          data={[{ id: 'all' as const, label: 'All', emoji: '📦' }, ...CATEGORIES]}
-          keyExtractor={item => item.id}
-          showsHorizontalScrollIndicator={false}
-          style={styles.categoryFilter}
-          contentContainerStyle={styles.categoryFilterContent}
-          renderItem={({ item }) => (
-            <Pressable
-              style={[styles.catChip, categoryFilter === item.id && styles.catChipActive]}
-              onPress={() => setCategoryFilter(item.id as CategoryId | 'all')}
-            >
-              <Text>{item.emoji}</Text>
-              <Text style={[styles.catChipText, categoryFilter === item.id && styles.catChipTextActive]}>
-                {item.label}
-              </Text>
-            </Pressable>
+        <>
+          <View style={styles.periodRow}>
+            {PERIODS.map(p => (
+              <Pressable
+                key={p.id}
+                style={[styles.periodChip, period === p.id && styles.periodChipActive]}
+                onPress={() => {
+                  setPeriod(p.id);
+                  if (p.id !== 'all') setPeriodAnchor(new Date());
+                }}
+              >
+                <Text style={[styles.periodText, period === p.id && styles.periodTextActive]}>
+                  {p.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          {period !== 'all' && (
+            <View style={styles.anchorRow}>
+              {period === 'day' ? (
+                <View style={styles.dayPickerWrap}>
+                  <ExpenseDatePicker
+                    valueIso={applyCalendarDay(periodAnchor)}
+                    onChange={iso => setPeriodAnchor(parseISO(iso))}
+                    label="Show day"
+                  />
+                </View>
+              ) : (
+                <>
+                  <Pressable
+                    style={styles.anchorNav}
+                    onPress={() => setPeriodAnchor(a => shiftPeriodAnchor(period, a, -1))}
+                  >
+                    <Text style={styles.anchorNavText}>‹</Text>
+                  </Pressable>
+                  <Text style={styles.anchorLabel}>{formatPeriodAnchor(period, periodAnchor)}</Text>
+                  <Pressable
+                    style={styles.anchorNav}
+                    onPress={() => setPeriodAnchor(a => shiftPeriodAnchor(period, a, 1))}
+                  >
+                    <Text style={styles.anchorNavText}>›</Text>
+                  </Pressable>
+                </>
+              )}
+            </View>
           )}
-        />
+
+          <FlatList
+            horizontal
+            data={[{ id: 'all' as const, label: 'All', emoji: '📦' }, ...CATEGORIES]}
+            keyExtractor={item => item.id}
+            showsHorizontalScrollIndicator={false}
+            style={styles.categoryFilter}
+            contentContainerStyle={styles.categoryFilterContent}
+            renderItem={({ item }) => (
+              <Pressable
+                style={[styles.catChip, categoryFilter === item.id && styles.catChipActive]}
+                onPress={() => setCategoryFilter(item.id as CategoryId | 'all')}
+              >
+                <Text>{item.emoji}</Text>
+                <Text style={[styles.catChipText, categoryFilter === item.id && styles.catChipTextActive]}>
+                  {item.label}
+                </Text>
+              </Pressable>
+            )}
+          />
+        </>
       ) : (
         <View style={styles.activityFilterRow}>
           {([
@@ -165,21 +237,28 @@ export function HistoryScreen() {
     categoryFilter,
     activityFilter,
     expenses.length,
+    filteredExpenses.length,
     activities.length,
     tab,
     isJoint,
+    period,
+    periodAnchor,
   ]);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      {tab === 'expenses' ? (
-        <FlatList
-          data={filteredExpenses}
+      <SwipeScrollLockGate>
+        {(scrollProps) =>
+          tab === 'expenses' ? (
+        <SectionList
+          {...scrollProps}
+          sections={sections}
           keyExtractor={item => item.id}
           ListHeaderComponent={ListHeader}
           contentContainerStyle={{ paddingBottom: bottomPad }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          stickySectionHeadersEnabled={false}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -195,14 +274,27 @@ export function HistoryScreen() {
               subtitle="Try changing the search term or filter"
             />
           }
-          renderItem={({ item, index }) => (
+          renderSectionHeader={({ section }) => (
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>{section.title}</Text>
+              <Text style={styles.sectionTotal}>{formatCurrency(section.total)}</Text>
+            </View>
+          )}
+          renderItem={({ item, index }: { item: Expense; index: number }) => (
             <View style={styles.cardWrap}>
-              <ExpenseCard expense={item} index={index} onDelete={requestDelete} onEdit={requestEdit} />
+              <ExpenseCard
+                expense={item}
+                index={index}
+                onDelete={requestDelete}
+                onEdit={requestEdit}
+                timeOnly
+              />
             </View>
           )}
         />
       ) : (
         <FlatList
+          {...scrollProps}
           data={filteredActivity}
           keyExtractor={item => item.id}
           ListHeaderComponent={ListHeader}
@@ -230,7 +322,9 @@ export function HistoryScreen() {
             </View>
           )}
         />
-      )}
+      )
+        }
+      </SwipeScrollLockGate>
       {deleteModal}
       {editModal}
     </View>
@@ -325,6 +419,47 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     searchIcon: { fontSize: 16, marginRight: Spacing.sm },
     searchInput: { flex: 1, ...Typography.body, color: colors.text, paddingVertical: Spacing.md },
     clearBtn: { color: colors.textMuted, fontSize: 16, padding: Spacing.sm },
+    periodRow: {
+      flexDirection: 'row',
+      paddingHorizontal: Spacing.lg,
+      marginBottom: Spacing.sm,
+      gap: Spacing.sm,
+    },
+    periodChip: {
+      paddingHorizontal: Spacing.md,
+      paddingVertical: Spacing.sm,
+      borderRadius: Radius.full,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    periodChipActive: {
+      backgroundColor: colors.primary + '33',
+      borderColor: colors.primary,
+    },
+    periodText: { ...Typography.caption, color: colors.textSecondary, fontWeight: '600' },
+    periodTextActive: { color: colors.primaryLight, fontWeight: '700' },
+    anchorRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: Spacing.lg,
+      marginBottom: Spacing.md,
+      gap: Spacing.md,
+    },
+    dayPickerWrap: { flex: 1 },
+    anchorNav: {
+      width: 36,
+      height: 36,
+      borderRadius: Radius.full,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    anchorNavText: { fontSize: 22, color: colors.text, lineHeight: 24 },
+    anchorLabel: { ...Typography.bodyBold, color: colors.text, minWidth: 120, textAlign: 'center' },
     categoryFilter: { maxHeight: 44, marginBottom: Spacing.md },
     categoryFilterContent: { paddingHorizontal: Spacing.lg },
     activityFilterRow: {
@@ -342,7 +477,18 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     catChipActive: { backgroundColor: colors.primary + '33', borderColor: colors.primary },
     catChipText: { ...Typography.small, color: colors.textSecondary },
     catChipTextActive: { color: colors.primaryLight, fontWeight: '700' },
-    cardWrap: { paddingHorizontal: Spacing.lg, marginBottom: Spacing.sm },
+    sectionHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: Spacing.lg,
+      paddingTop: Spacing.md,
+      paddingBottom: Spacing.sm,
+      backgroundColor: colors.background,
+    },
+    sectionTitle: { ...Typography.bodyBold, color: colors.text },
+    sectionTotal: { ...Typography.caption, color: colors.textSecondary, fontWeight: '700' },
+    cardWrap: { paddingHorizontal: Spacing.lg },
     activityCard: {
       backgroundColor: colors.surface,
       borderRadius: Radius.lg,

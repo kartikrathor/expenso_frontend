@@ -3,13 +3,14 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
+  FlatList,
   Pressable,
   TextInput,
   Modal,
   KeyboardAvoidingView,
   Platform,
   RefreshControl,
+  ListRenderItem,
 } from 'react-native';
 import Animated, { FadeInDown, useAnimatedStyle, withSpring, useSharedValue } from 'react-native-reanimated';
 import { WaterGradient } from '../components/WaterGradient';
@@ -27,13 +28,16 @@ import { SuccessToast } from '../components/SuccessToast';
 import { BudgetProgress } from '../components/BudgetProgress';
 import { QuickAddBar } from '../components/QuickAddBar';
 import { ThemeToggle } from '../components/ThemeToggle';
+import { AddExpenseHeroIcon } from '../components/icons/AddExpenseHeroIcon';
+import { SwipeScrollLockGate } from '../hooks/useSwipeScrollLock';
 import { formatCurrency } from '../utils/expenseParser';
 import { Spacing, Typography, Radius } from '../constants/theme';
 import { getTabBarBottomInset } from '../constants/layout';
 import { useTheme } from '../hooks/useTheme';
+import { useAuthStore } from '../store/authStore';
 import { useDeleteExpense } from '../hooks/useDeleteExpense';
 import { useEditExpense } from '../hooks/useEditExpense';
-import { TimeFilter, MerchantId } from '../types/expense';
+import { Expense, TimeFilter, MerchantId } from '../types/expense';
 import { format } from 'date-fns';
 
 const FILTERS: { key: TimeFilter; label: string }[] = [
@@ -43,10 +47,18 @@ const FILTERS: { key: TimeFilter; label: string }[] = [
   { key: 'all', label: 'All' },
 ];
 
+function firstName(full?: string | null) {
+  const n = (full || '').trim();
+  if (!n) return '';
+  return n.split(/\s+/)[0];
+}
+
 export function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const bottomPad = getTabBarBottomInset(insets.bottom);
+  const userName = useAuthStore(s => s.user?.name);
+  const greetName = firstName(userName);
 
   const [filter, setFilter] = useState<TimeFilter>('month');
   const [showAdd, setShowAdd] = useState(false);
@@ -68,8 +80,6 @@ export function HomeScreen() {
   const monthTotal = useMemo(() => getTotal('month'), [getTotal, householdExpenses]);
   const todayTotal = useMemo(() => getTodayTotal(), [getTodayTotal, householdExpenses]);
 
-  // Home list = latest shared/personal items (same pool as History).
-  // Time chips only change totals above — so partner expenses always appear.
   const recentList = useMemo(() => {
     return [...householdExpenses]
       .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
@@ -86,18 +96,18 @@ export function HomeScreen() {
 
   const handleSave = useCallback(async (data: ExpenseSaveData) => {
     if (isJoint) {
-      await addJointExpense({
+      const created = await addJointExpense({
         amount: data.amount,
         merchantLabel: data.merchantLabel,
         merchant: data.merchant,
         category: data.category,
         note: data.note,
         inputMethod: data.inputMethod,
+        date: data.date,
       });
-      const latest = useJointStore.getState().expenses[0];
-      if (latest) await useActivityStore.getState().logAdded(latest, 'joint');
+      await useActivityStore.getState().logAdded(created, 'joint');
     } else {
-      const created = await addExpense({ ...data, date: new Date().toISOString() });
+      const created = await addExpense({ ...data, date: data.date });
       await useActivityStore.getState().logAdded(created, 'local');
     }
     setToast({ amount: data.amount, merchant: data.merchant, label: data.merchantLabel });
@@ -110,6 +120,145 @@ export function HomeScreen() {
   const fabStyle = useAnimatedStyle(() => ({
     transform: [{ scale: fabScale.value }],
   }));
+
+  const filterLabel =
+    filter === 'month' ? 'This Month'
+      : filter === 'week' ? 'This Week'
+        : filter === 'year' ? 'This Year'
+          : 'All Time';
+
+  const openBudget = useCallback(() => {
+    setBudgetInput(monthlyBudget > 0 ? String(monthlyBudget) : '');
+    setShowBudget(true);
+  }, [monthlyBudget]);
+
+  const ListHeader = useMemo(() => (
+    <View>
+      <Animated.View entering={FadeInDown.duration(220)} style={styles.header}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.greeting}>
+            {greetName ? `Hello ${greetName} 👋` : 'Hello 👋'}
+          </Text>
+          <Text style={styles.date}>{format(new Date(), 'EEEE, d MMMM')}</Text>
+        </View>
+        <ThemeToggle />
+      </Animated.View>
+
+      {isJoint && (
+        <View style={styles.jointBanner}>
+          <Text style={styles.jointBannerText}>
+            {joint!.emoji} Joint account · {joint!.name}
+            {joint!.memberCount >= 2 ? ' · shared with partner' : ' · invite partner from Profile'}
+          </Text>
+          {(pendingCount > 0 || isSyncing) && (
+            <Text style={styles.syncHint}>
+              {isSyncing
+                ? 'Syncing shared expenses…'
+                : `${pendingCount} change${pendingCount > 1 ? 's' : ''} waiting to sync`}
+            </Text>
+          )}
+        </View>
+      )}
+
+      <Animated.View entering={FadeInDown.delay(60).duration(220)}>
+        <WaterGradient fill={waterFill} style={styles.heroCard}>
+          <Text style={styles.heroLabel}>
+            {filterLabel}
+            {isJoint ? ' · Joint' : ''}
+          </Text>
+          <Text style={styles.heroAmount}>{formatCurrency(total)}</Text>
+          <View style={styles.heroRow}>
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatLabel}>Today</Text>
+              <Text style={styles.heroStatValue}>{formatCurrency(todayTotal)}</Text>
+            </View>
+            <View style={styles.heroDivider} />
+            <View style={styles.heroStat}>
+              <Text style={styles.heroStatLabel}>Transactions</Text>
+              <Text style={styles.heroStatValue}>{filtered.length}</Text>
+            </View>
+          </View>
+        </WaterGradient>
+      </Animated.View>
+
+      <BudgetProgress
+        spent={monthTotal}
+        budget={monthlyBudget}
+        onSetBudget={openBudget}
+      />
+
+      <QuickAddBar onPress={() => setShowAdd(true)} />
+
+      <View style={styles.filterRow}>
+        {FILTERS.map(f => (
+          <Pressable
+            key={f.key}
+            style={[styles.filterChip, filter === f.key && styles.filterChipActive]}
+            onPress={() => setFilter(f.key)}
+          >
+            <Text style={[styles.filterText, filter === f.key && styles.filterTextActive]}>
+              {f.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      <Text style={styles.sectionTitle}>{isJoint ? 'Shared expenses' : 'Recent'}</Text>
+      {isJoint && (
+        <Text style={styles.sectionHint}>
+          Latest from both of you · pull down to refresh
+        </Text>
+      )}
+    </View>
+  ), [
+    styles,
+    greetName,
+    isJoint,
+    joint,
+    pendingCount,
+    isSyncing,
+    waterFill,
+    filterLabel,
+    total,
+    todayTotal,
+    filtered.length,
+    monthTotal,
+    monthlyBudget,
+    openBudget,
+    filter,
+  ]);
+
+  const renderItem = useCallback<ListRenderItem<Expense>>(
+    ({ item }) => (
+      <ExpenseCard
+        expense={item}
+        onDelete={handleDelete}
+        onEdit={requestEdit}
+      />
+    ),
+    [handleDelete, requestEdit],
+  );
+
+  const keyExtractor = useCallback((item: Expense) => item.id, []);
+
+  const ListEmpty = useMemo(() => (
+    <EmptyState
+      icon={
+        <LinearGradient
+          colors={[colors.gradientStart, colors.gradientEnd]}
+          style={styles.emptyIcon}
+        >
+          <AddExpenseHeroIcon size={48} color="#FFF" plusColor={colors.gradientStart} />
+        </LinearGradient>
+      }
+      title={isJoint ? 'Add a shared expense' : 'Add your first expense'}
+      subtitle={
+        isJoint
+          ? 'Both partners can add here — it syncs for both of you'
+          : 'In the Quick tab, type "Blinkit 200" or speak via the mic'
+      }
+    />
+  ), [colors.gradientStart, colors.gradientEnd, styles.emptyIcon, isJoint]);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -128,117 +277,33 @@ export function HomeScreen() {
         />
       )}
 
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad + 72 }]}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.primary}
-            colors={[colors.primary]}
-          />
-        }
-      >
-        <Animated.View entering={FadeInDown.duration(220)} style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Text style={styles.greeting}>Hello 👋</Text>
-            <Text style={styles.date}>{format(new Date(), 'EEEE, d MMMM')}</Text>
-          </View>
-          <ThemeToggle />
-        </Animated.View>
-
-        {isJoint && (
-          <View style={styles.jointBanner}>
-            <Text style={styles.jointBannerText}>
-              {joint!.emoji} Joint account · {joint!.name}
-              {joint!.memberCount >= 2 ? ' · shared with partner' : ' · invite partner from Profile'}
-            </Text>
-            {(pendingCount > 0 || isSyncing) && (
-              <Text style={styles.syncHint}>
-                {isSyncing
-                  ? 'Syncing shared expenses…'
-                  : `${pendingCount} change${pendingCount > 1 ? 's' : ''} waiting to sync`}
-              </Text>
-            )}
-          </View>
-        )}
-
-        <Animated.View entering={FadeInDown.delay(60).duration(220)}>
-          <WaterGradient fill={waterFill} style={styles.heroCard}>
-            <Text style={styles.heroLabel}>
-              {filter === 'month' ? 'This Month' : filter === 'week' ? 'This Week' : filter === 'year' ? 'This Year' : 'All Time'}
-              {isJoint ? ' · Joint' : ''}
-            </Text>
-            <Text style={styles.heroAmount}>{formatCurrency(total)}</Text>
-            <View style={styles.heroRow}>
-              <View style={styles.heroStat}>
-                <Text style={styles.heroStatLabel}>Today</Text>
-                <Text style={styles.heroStatValue}>{formatCurrency(todayTotal)}</Text>
-              </View>
-              <View style={styles.heroDivider} />
-              <View style={styles.heroStat}>
-                <Text style={styles.heroStatLabel}>Transactions</Text>
-                <Text style={styles.heroStatValue}>{filtered.length}</Text>
-              </View>
-            </View>
-          </WaterGradient>
-        </Animated.View>
-
-        <BudgetProgress
-          spent={monthTotal}
-          budget={monthlyBudget}
-          onSetBudget={() => {
-            setBudgetInput(monthlyBudget > 0 ? String(monthlyBudget) : '');
-            setShowBudget(true);
-          }}
-        />
-
-        <QuickAddBar onPress={() => setShowAdd(true)} />
-
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterRow}>
-          {FILTERS.map(f => (
-            <Pressable
-              key={f.key}
-              style={[styles.filterChip, filter === f.key && styles.filterChipActive]}
-              onPress={() => setFilter(f.key)}
-            >
-              <Text style={[styles.filterText, filter === f.key && styles.filterTextActive]}>
-                {f.label}
-              </Text>
-            </Pressable>
-          ))}
-        </ScrollView>
-
-        <Text style={styles.sectionTitle}>{isJoint ? 'Shared expenses' : 'Recent'}</Text>
-        {isJoint && (
-          <Text style={styles.sectionHint}>
-            Latest from both of you · pull down to refresh
-          </Text>
-        )}
-
-        {recentList.length === 0 ? (
-          <EmptyState
-            emoji="💸"
-            title={isJoint ? 'Add a shared expense' : 'Add your first expense'}
-            subtitle={
-              isJoint
-                ? 'Both partners can add here — it syncs for both of you'
-                : 'In the Quick tab, type "Blinkit 200" or speak via the mic'
+      <SwipeScrollLockGate>
+        {(scrollProps) => (
+          <FlatList
+            {...scrollProps}
+            data={recentList}
+            keyExtractor={keyExtractor}
+            renderItem={renderItem}
+            ListHeaderComponent={ListHeader}
+            ListEmptyComponent={ListEmpty}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad + 72 }]}
+            initialNumToRender={8}
+            maxToRenderPerBatch={6}
+            windowSize={7}
+            updateCellsBatchingPeriod={50}
+            removeClippedSubviews={Platform.OS === 'android'}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={colors.primary}
+                colors={[colors.primary]}
+              />
             }
           />
-        ) : (
-          recentList.map((expense, i) => (
-            <ExpenseCard
-              key={expense.id}
-              expense={expense}
-              index={i}
-              onDelete={handleDelete}
-              onEdit={requestEdit}
-            />
-          ))
         )}
-      </ScrollView>
+      </SwipeScrollLockGate>
 
       <View style={[styles.fabRow, { bottom: bottomPad - 8 }]}>
         <HoldMicFab onSave={handleSave} />
@@ -303,7 +368,7 @@ export function HomeScreen() {
 function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: Spacing.lg },
+    scroll: { padding: Spacing.lg, flexGrow: 1 },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: Spacing.md },
     headerLeft: { flex: 1 },
     greeting: { ...Typography.h1, color: colors.text },
@@ -338,16 +403,33 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     heroStatLabel: { ...Typography.small, color: colors.textMuted },
     heroStatValue: { ...Typography.bodyBold, color: colors.text, marginTop: 2 },
     heroDivider: { width: 1, height: 32, backgroundColor: colors.border, marginHorizontal: Spacing.md },
-    filterRow: { marginBottom: Spacing.lg },
+    filterRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: Spacing.sm,
+      marginBottom: Spacing.lg,
+    },
     filterChip: {
       paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, borderRadius: Radius.full,
-      backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border, marginRight: Spacing.sm,
+      backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
     },
     filterChipActive: { backgroundColor: colors.primary + '33', borderColor: colors.primary },
     filterText: { ...Typography.caption, color: colors.textSecondary },
     filterTextActive: { color: colors.primaryLight, fontWeight: '700' },
     sectionTitle: { ...Typography.h2, color: colors.text, marginBottom: Spacing.xs, fontSize: 18 },
     sectionHint: { ...Typography.caption, color: colors.textMuted, marginBottom: Spacing.md },
+    emptyIcon: {
+      width: 88,
+      height: 88,
+      borderRadius: 28,
+      alignItems: 'center',
+      justifyContent: 'center',
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 10 },
+      shadowOpacity: 0.35,
+      shadowRadius: 16,
+      elevation: 10,
+    },
     fabRow: {
       position: 'absolute',
       right: Spacing.lg,

@@ -11,11 +11,12 @@ import LinearGradient from 'react-native-linear-gradient';
 import { useTheme } from '../hooks/useTheme';
 import { Radius, Spacing, Typography } from '../constants/theme';
 import { FLOATING_TAB_HEIGHT, FLOATING_TAB_MARGIN } from '../constants/layout';
+import { StatsChartIcon } from './icons/StatsChartIcon';
 
 const TABS = [
   { name: 'Home', emoji: '🏠', label: 'Home' },
   { name: 'Ask', emoji: '✨', label: 'Ask' },
-  { name: 'Analytics', emoji: '📊', label: 'Stats' },
+  { name: 'Analytics', emoji: '📊', label: 'Stats', icon: 'stats' as const },
   { name: 'History', emoji: '📋', label: 'Log' },
   { name: 'Profile', emoji: '👤', label: 'Profile' },
 ];
@@ -66,6 +67,7 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
             <TabButton
               key={route.key}
               emoji={tab.emoji}
+              icon={tab.icon}
               label={tab.label}
               focused={focused}
               colors={colors}
@@ -89,12 +91,14 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
 
 function TabButton({
   emoji,
+  icon,
   label,
   focused,
   colors,
   onPress,
 }: {
   emoji: string;
+  icon?: 'stats';
   label: string;
   focused: boolean;
   colors: ReturnType<typeof useTheme>['colors'];
@@ -110,6 +114,14 @@ function TabButton({
     transform: [{ scale: scale.value }],
   }));
 
+  const glyph = icon === 'stats' ? (
+    <StatsChartIcon size={focused ? 15 : 17} color={focused ? '#FFF' : colors.textMuted} />
+  ) : (
+    <Text style={[focused ? styles.activeEmoji : styles.inactiveEmoji, !focused && { opacity: 0.5 }]}>
+      {emoji}
+    </Text>
+  );
+
   return (
     <Pressable style={styles.tabBtn} onPress={onPress}>
       {focused ? (
@@ -120,13 +132,13 @@ function TabButton({
             end={{ x: 1, y: 1 }}
             style={styles.activeGradient}
           >
-            <Text style={styles.activeEmoji}>{emoji}</Text>
+            {glyph}
             <Text style={styles.activeLabel}>{label}</Text>
           </LinearGradient>
         </Animated.View>
       ) : (
         <Animated.View style={[styles.inactiveTab, animStyle]}>
-          <Text style={[styles.inactiveEmoji, { opacity: 0.5 }]}>{emoji}</Text>
+          {glyph}
           <Text style={[styles.inactiveLabel, { color: colors.textMuted }]}>{label}</Text>
         </Animated.View>
       )}

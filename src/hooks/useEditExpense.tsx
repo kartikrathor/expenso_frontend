@@ -38,6 +38,7 @@ export function useEditExpense() {
       merchant: MerchantId;
       category: CategoryId;
       note: string;
+      date: string;
     },
   ) => {
     if (!pending) return;
