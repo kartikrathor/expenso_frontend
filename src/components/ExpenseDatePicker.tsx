@@ -23,6 +23,8 @@ import {
 type ExpenseDatePickerProps = {
   valueIso: string;
   onChange: (iso: string) => void;
+  /** Last manually used past date — shown as a one-tap calendar shortcut. */
+  lastUsedIso?: string | null;
   label?: string;
   /** Tighter trigger + short date label (Insights custom range). */
   compact?: boolean;
@@ -54,6 +56,7 @@ function CalendarIcon({ color, size = 20 }: { color: string; size?: number }) {
 export function ExpenseDatePicker({
   valueIso,
   onChange,
+  lastUsedIso,
   label = 'Date',
   compact = false,
   open: openProp,
@@ -93,6 +96,18 @@ export function ExpenseDatePicker({
 
   const today = startOfDay(new Date());
   const yesterday = subDays(today, 1);
+  const lastUsed = useMemo(() => {
+    if (!lastUsedIso) return null;
+    try {
+      const date = parseISO(lastUsedIso);
+      if (Number.isNaN(date.getTime()) || isAfter(startOfDay(date), today)) return null;
+      return date;
+    } catch {
+      return null;
+    }
+  }, [lastUsedIso, today]);
+  const showLastUsed =
+    lastUsed && !isToday(lastUsed) && !isYesterday(lastUsed);
   const grid = buildMonthGrid(monthCursor);
   const canGoNextMonth =
     addMonths(monthCursor, 1).getFullYear() < today.getFullYear() ||
@@ -153,6 +168,24 @@ export function ExpenseDatePicker({
                 Yesterday
               </Text>
             </Pressable>
+            {showLastUsed ? (
+              <Pressable
+                style={[
+                  styles.quickChip,
+                  isSameDay(lastUsed, selected) && styles.quickChipActive,
+                ]}
+                onPress={() => pickDay(lastUsed)}
+              >
+                <Text
+                  style={[
+                    styles.quickText,
+                    isSameDay(lastUsed, selected) && styles.quickTextActive,
+                  ]}
+                >
+                  Last used · {format(lastUsed, 'd MMM')}
+                </Text>
+              </Pressable>
+            ) : null}
           </View>
 
           <View style={styles.monthNav}>

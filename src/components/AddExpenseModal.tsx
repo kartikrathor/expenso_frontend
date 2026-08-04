@@ -40,8 +40,10 @@ import { Spacing, Typography, Radius } from '../constants/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useAppAlert } from './AppAlert';
 import ReactNativeHapticFeedback from 'react-native-haptic-feedback';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const QUICK_AMOUNTS = [50, 100, 200, 500, 1000, 2000];
+const LAST_PAST_EXPENSE_DATE_KEY = '@expenso:last-past-expense-date';
 
 export interface ExpenseSaveData {
   amount: number;
@@ -72,6 +74,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
   const [step, setStep] = useState<Step>('input');
   const [smartInput, setSmartInput] = useState('');
   const [amount, setAmount] = useState('');
+  const [merchantName, setMerchantName] = useState('');
   const [note, setNote] = useState('');
   const [selectedMerchant, setSelectedMerchant] = useState<MerchantId>('default');
   const [selectedCategory, setSelectedCategory] = useState<CategoryId>('other');
@@ -95,6 +98,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [saving, setSaving] = useState(false);
   const [expenseDate, setExpenseDate] = useState(() => new Date().toISOString());
+  const [lastPastExpenseDate, setLastPastExpenseDate] = useState<string | null>(null);
   const saveScale = useSharedValue(1);
 
   const reset = useCallback(() => {
@@ -102,6 +106,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
     setStep('input');
     setSmartInput('');
     setAmount('');
+    setMerchantName('');
     setNote('');
     setSelectedMerchant('default');
     setSelectedCategory('other');
@@ -113,6 +118,23 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
     setSuggestIcons([]);
     setSaving(false);
     setExpenseDate(new Date().toISOString());
+  }, []);
+
+  useEffect(() => {
+    AsyncStorage.getItem(LAST_PAST_EXPENSE_DATE_KEY)
+      .then(stored => {
+        if (!stored) return;
+        const date = new Date(stored);
+        const today = new Date();
+        date.setHours(0, 0, 0, 0);
+        today.setHours(0, 0, 0, 0);
+        if (!Number.isNaN(date.getTime()) && date.getTime() < today.getTime()) {
+          setLastPastExpenseDate(stored);
+        }
+      })
+      .catch(() => {
+        // The shortcut is optional; adding an expense should never depend on storage.
+      });
   }, []);
 
   useEffect(() => {
@@ -249,6 +271,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
   const handleSmartInputChange = (text: string) => {
     setSmartInput(text);
     const result = parseExpenseText(text);
+    setMerchantName(text.trim() ? result.merchantLabel : '');
     if (result.merchant !== 'default') {
       setSelectedMerchant(result.merchant);
       setSelectedCategory(result.category);
@@ -273,7 +296,9 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
       goToConfirm({ ...result, note: text });
     } else {
       setTab('manual');
-      setNote(text);
+      setMerchantName(
+        result.merchantLabel === DEFAULT_MERCHANT.label ? text : result.merchantLabel,
+      );
       setSmartInput(text);
     }
   };
@@ -285,10 +310,9 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
     goToConfirm({
       amount: numAmount,
       merchant: selectedMerchant,
-      merchantLabel:
-        selectedMerchant === 'default' && note ? note.slice(0, 30) : merchantConfig.label,
+      merchantLabel: merchantName.trim().slice(0, 30) || merchantConfig.label,
       category: selectedCategory,
-      note: note || smartInput,
+      note: note.trim(),
     });
   };
 
@@ -305,6 +329,16 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
         inputMethod: tab === 'voice' ? 'voice' : 'manual',
         date: expenseDate,
       });
+      const savedDay = new Date(expenseDate);
+      const today = new Date();
+      savedDay.setHours(0, 0, 0, 0);
+      today.setHours(0, 0, 0, 0);
+      if (!Number.isNaN(savedDay.getTime()) && savedDay.getTime() < today.getTime()) {
+        setLastPastExpenseDate(expenseDate);
+        AsyncStorage.setItem(LAST_PAST_EXPENSE_DATE_KEY, expenseDate).catch(() => {
+          // Saving the expense succeeded; a shortcut cache failure is non-blocking.
+        });
+      }
       ReactNativeHapticFeedback.trigger('impactMedium');
       onClose();
     } catch (err) {
@@ -357,7 +391,11 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
           {parsed.note ? <Text style={styles.confirmNote}>"{parsed.note}"</Text> : null}
         </LinearGradient>
 
-        <ExpenseDatePicker valueIso={expenseDate} onChange={setExpenseDate} />
+        <ExpenseDatePicker
+          valueIso={expenseDate}
+          onChange={setExpenseDate}
+          lastUsedIso={lastPastExpenseDate}
+        />
 
         <Pressable style={styles.confirmBtn} onPress={confirmSave} disabled={saving}>
           <LinearGradient
@@ -567,19 +605,17 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                         placeholderTextColor={colors.textMuted}
                         returnKeyType="next"
                       />
-                      <Text style={styles.label}>Note / Merchant</Text>
+                      <Text style={styles.label}>Merchant name</Text>
                       <TextInput
                         style={styles.input}
-                        value={note}
+                        value={merchantName}
                         onChangeText={text => {
-                          setNote(text);
+                          setMerchantName(text);
                           const r = parseExpenseText(text);
-                          if (r.merchant !== 'default') {
-                            setSelectedMerchant(r.merchant);
-                            setSelectedCategory(r.category);
-                          }
+                          setSelectedMerchant(r.merchant);
+                          setSelectedCategory(r.category);
                         }}
-                        placeholder="Blinkit groceries"
+                        placeholder="e.g. Blinkit, Local shop"
                         placeholderTextColor={colors.textMuted}
                         returnKeyType="done"
                         onSubmitEditing={handleManualSave}
@@ -593,6 +629,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                             onPress={() => {
                               setSelectedMerchant(m.id);
                               setSelectedCategory(m.category);
+                              setMerchantName(m.label);
                             }}
                           >
                             <MerchantIcon merchantId={m.id} size={32} />
@@ -602,6 +639,16 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                           </Pressable>
                         ))}
                       </ScrollView>
+                      <Text style={styles.label}>Notes (optional)</Text>
+                      <TextInput
+                        style={styles.input}
+                        value={note}
+                        onChangeText={setNote}
+                        placeholder="e.g. Weekly groceries"
+                        placeholderTextColor={colors.textMuted}
+                        returnKeyType="done"
+                        onSubmitEditing={handleManualSave}
+                      />
                       <Text style={styles.label}>Category</Text>
                       <View style={styles.categoryGrid}>
                         {categoryOptions.map(c => {

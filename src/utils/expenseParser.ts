@@ -299,7 +299,12 @@ export function formatCurrency(amount: number): string {
 }
 
 export function formatCompactCurrency(amount: number): string {
-  if (amount >= 100000) return `₹${(amount / 100000).toFixed(1)}L`;
-  if (amount >= 1000) return `₹${(amount / 1000).toFixed(1)}K`;
+  const formatUnit = (value: number, unit: string) =>
+    `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}${unit}`;
+  const absolute = Math.abs(amount);
+
+  if (absolute >= 10000000) return formatUnit(amount / 10000000, 'Cr');
+  if (absolute >= 100000) return formatUnit(amount / 100000, 'L');
+  if (absolute >= 1000) return formatUnit(amount / 1000, 'K');
   return formatCurrency(amount);
 }
