@@ -8,23 +8,36 @@ import {
   Switch,
   Modal,
   TextInput,
-  Alert,
-  Linking,
   Share,
   Platform,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import LinearGradient from 'react-native-linear-gradient';
 import { Spacing, Typography, Radius } from '../constants/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useAppLockStore } from '../store/appLockStore';
 import { useHouseholdExpenses } from '../hooks/useHouseholdExpenses';
-import { expensesToCsv, buildExportFileName } from '../utils/exportExpenses';
+import { exportAndShareExcel, exportAndSharePdf } from '../utils/exportExpenses';
 import {
   getBiometryAvailability,
   promptBiometricUnlock,
   BiometryAvailability,
 } from '../utils/biometrics';
+import { AppAlertModal, AppAlertContent } from '../components/AppAlertModal';
+import { FeedbackModal } from '../components/FeedbackModal';
+import { SupportModal } from '../components/SupportModal';
+import { ThemesScreen } from './ThemesScreen';
+import { useAuthStore } from '../store/authStore';
+import { useJointStore } from '../store/jointStore';
+import { useProStore } from '../store/proStore';
+import { useThemeStore } from '../store/themeStore';
+import { getThemePackMeta, THEME_PACKS } from '../constants/themePacks';
+import { apiRequest } from '../services/api';
+import { useNotificationNavStore } from '../store/notificationNavStore';
+import { userFacingError } from '../utils/userFacingError';
+import { LEGAL_PRIVACY_URL, LEGAL_TERMS_URL } from '../constants/api';
 
 type SettingsScreenProps = {
   visible: boolean;
@@ -71,7 +84,7 @@ function SettingsRow({ title, subtitle, onPress, right, pro, danger }: RowProps)
 
 export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, gradientPoints } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { expenses, isJoint } = useHouseholdExpenses();
 
@@ -86,7 +99,69 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
   const [pin, setPinInput] = useState('');
   const [pin2, setPin2] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [supportOpen, setSupportOpen] = useState(false);
+  const [themesOpen, setThemesOpen] = useState(false);
+  const isPro = useProStore(s => s.isPro);
+  const openPaywall = useProStore(s => s.openPaywall);
+  const packId = useThemeStore(s => s.packId);
+  const packMeta = getThemePackMeta(packId);
+  const themeSwatches = useMemo(
+    () => THEME_PACKS.slice(0, 5).map(p => [p.swatch, p.swatchAlt] as const),
+    [],
+  );
+  const [supportUnread, setSupportUnread] = useState(0);
   const [bio, setBio] = useState<BiometryAvailability | null>(null);
+  /** After PIN is created from biometric tap, continue enabling biometrics */
+  const [pendingBioAfterPin, setPendingBioAfterPin] = useState(false);
+  const [alert, setAlert] = useState<AppAlertContent | null>(null);
+  const token = useAuthStore(s => s.token);
+  const user = useAuthStore(s => s.user);
+  const logout = useAuthStore(s => s.logout);
+  const authBusy = useAuthStore(s => s.isBusy);
+  const updateNotificationPrefs = useAuthStore(s => s.updateNotificationPrefs);
+  const joint = useJointStore(s => s.joint);
+  const openSupportFromPush = useNotificationNavStore(s => s.openSupport);
+  const clearOpenSupport = useNotificationNavStore(s => s.clearOpenSupport);
+
+  const notifyPartnerOnMyJointAdd = user?.notifyPartnerOnMyJointAdd !== false;
+  const notifyMeOnPartnerJointAdd = user?.notifyMeOnPartnerJointAdd !== false;
+  const showJointNotifPrefs = !!joint;
+
+  const showAlert = useCallback((content: AppAlertContent) => {
+    setAlert(content);
+  }, []);
+
+  const onToggleNotifyPartner = useCallback(
+    async (value: boolean) => {
+      try {
+        await updateNotificationPrefs({ notifyPartnerOnMyJointAdd: value });
+      } catch (err: any) {
+        showAlert({
+          icon: '⚠️',
+          title: 'Couldn’t update',
+          message: userFacingError(err, 'Couldn’t update this setting. Please try again.'),
+        });
+      }
+    },
+    [updateNotificationPrefs, showAlert],
+  );
+
+  const onToggleNotifyMe = useCallback(
+    async (value: boolean) => {
+      try {
+        await updateNotificationPrefs({ notifyMeOnPartnerJointAdd: value });
+      } catch (err: any) {
+        showAlert({
+          icon: '⚠️',
+          title: 'Couldn’t update',
+          message: userFacingError(err, 'Couldn’t update this setting. Please try again.'),
+        });
+      }
+    },
+    [updateNotificationPrefs, showAlert],
+  );
 
   useEffect(() => {
     if (!visible) return;
@@ -99,8 +174,39 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
     };
   }, [visible]);
 
+  useEffect(() => {
+    if (visible && openSupportFromPush) {
+      setSupportOpen(true);
+      clearOpenSupport();
+    }
+  }, [visible, openSupportFromPush, clearOpenSupport]);
+
+  useEffect(() => {
+    if (!visible || !token) return;
+    let cancelled = false;
+    apiRequest<{ unreadCount?: number; tickets?: { unread?: boolean; unreadByUser?: boolean }[] }>(
+      '/api/support/tickets?limit=30',
+      { token },
+    )
+      .then(data => {
+        if (cancelled) return;
+        const count =
+          data.unreadCount ??
+          (data.tickets || []).filter(t => t.unread || t.unreadByUser).length;
+        setSupportUnread(count);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, token]);
+
   const onToggleLock = useCallback(
     async (value: boolean) => {
+      if (value && !isPro) {
+        openPaywall('app_lock');
+        return;
+      }
       if (value) {
         if (!hasPin) {
           setPinModal(true);
@@ -109,51 +215,126 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
         try {
           await setEnabled(true);
         } catch (e: any) {
-          Alert.alert('Lock', e?.message || 'Could not enable lock');
+          showAlert({
+            icon: '🔒',
+            title: 'Lock',
+            message: userFacingError(e, 'Couldn’t turn on App lock. Please try again.'),
+          });
         }
         return;
       }
       try {
         await setEnabled(false);
       } catch (e: any) {
-        Alert.alert('Lock', e?.message || 'Could not disable lock');
+        showAlert({
+          icon: '🔒',
+          title: 'Lock',
+          message: userFacingError(e, 'Couldn’t turn off App lock. Please try again.'),
+        });
       }
     },
-    [hasPin, setEnabled],
+    [hasPin, setEnabled, showAlert, isPro, openPaywall],
   );
+
+  const enableBiometricFlow = useCallback(async () => {
+    const availability = await getBiometryAvailability();
+    setBio(availability);
+    if (!availability.available) {
+      showAlert({
+        icon: '👆',
+        title: 'Not available',
+        message:
+          availability.error ||
+          'Add a fingerprint or Face ID in your phone settings, then try again.',
+      });
+      return;
+    }
+    const result = await promptBiometricUnlock(availability.label);
+    if (!result.success) {
+      if (!result.cancelled) {
+        showAlert({
+          icon: '👆',
+          title: 'Couldn’t verify',
+          message: result.error || 'Please try again.',
+        });
+      }
+      return;
+    }
+    try {
+      await setBiometricEnabled(true);
+      showAlert({
+        icon: '✅',
+        title: `${availability.label} on`,
+        message: `Next time you open Expenso, you can unlock with ${availability.label}. PIN stays as backup.`,
+      });
+    } catch (e: any) {
+      showAlert({
+        icon: '👆',
+        title: 'Biometric',
+        message: userFacingError(e, 'Couldn’t update biometric unlock. Please try again.'),
+      });
+    }
+  }, [setBiometricEnabled, showAlert]);
+
+  const openPinForBiometric = useCallback(() => {
+    setPendingBioAfterPin(true);
+    setPinInput('');
+    setPin2('');
+    setPinModal(true);
+  }, []);
 
   const onToggleBiometric = useCallback(
     async (value: boolean) => {
+      if (value && !isPro) {
+        openPaywall('biometrics');
+        return;
+      }
       if (value) {
-        if (!enabled) {
-          Alert.alert('App lock first', 'Turn on App lock (PIN) before enabling biometrics.');
+        if (!enabled || !hasPin) {
+          showAlert({
+            icon: '🔒',
+            title: 'Set App lock first',
+            message: `To use ${bio?.label || 'biometric'} unlock, you need an App lock PIN first. Your PIN is also the backup if fingerprint or Face ID fails.`,
+            buttons: [
+              { label: 'Cancel', variant: 'secondary' },
+              { label: 'Set PIN', variant: 'primary', onPress: openPinForBiometric },
+            ],
+          });
           return;
         }
-        if (!bio?.available) {
-          Alert.alert(
-            'Not available',
-            'Add a fingerprint or Face ID in your phone settings, then try again.',
-          );
-          return;
-        }
-        const ok = await promptBiometricUnlock(bio.label);
-        if (!ok) {
-          Alert.alert('Cancelled', `${bio.label} was not confirmed.`);
-          return;
-        }
+        await enableBiometricFlow();
+        return;
       }
       try {
-        await setBiometricEnabled(value);
+        await setBiometricEnabled(false);
       } catch (e: any) {
-        Alert.alert('Biometric', e?.message || 'Could not update');
+        showAlert({
+          icon: '👆',
+          title: 'Biometric',
+          message: userFacingError(e, 'Couldn’t update biometric unlock. Please try again.'),
+        });
       }
     },
-    [enabled, bio, setBiometricEnabled],
+    [
+      enabled,
+      hasPin,
+      bio,
+      enableBiometricFlow,
+      setBiometricEnabled,
+      showAlert,
+      openPinForBiometric,
+      isPro,
+      openPaywall,
+    ],
   );
 
   const savePin = useCallback(async () => {
     if (pin !== pin2) {
-      Alert.alert('PIN mismatch', 'Both PINs must match.');
+      showAlert({
+        icon: '🔢',
+        title: 'PIN mismatch',
+        message: 'Both PINs must match.',
+      });
       return;
     }
     try {
@@ -161,61 +342,89 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
       setPinModal(false);
       setPinInput('');
       setPin2('');
-      Alert.alert(
-        'App lock on',
-        bio?.available
+      const continueBio = pendingBioAfterPin;
+      setPendingBioAfterPin(false);
+
+      if (continueBio) {
+        void enableBiometricFlow();
+        return;
+      }
+
+      showAlert({
+        icon: '🔒',
+        title: 'App lock on',
+        message: bio?.available
           ? `PIN saved. You can also enable ${bio.label} below for faster unlock.`
           : 'Expenso will ask for this PIN when you open the app.',
-      );
+      });
     } catch (e: any) {
-      Alert.alert('Invalid PIN', e?.message || 'Try again');
+      showAlert({
+        icon: '🔢',
+        title: 'Invalid PIN',
+        message: userFacingError(e, 'Please enter a 4–8 digit PIN.'),
+      });
     }
-  }, [pin, pin2, setPin, bio]);
+  }, [pin, pin2, setPin, bio, pendingBioAfterPin, enableBiometricFlow, showAlert]);
 
-  const exportCsv = useCallback(async () => {
+  const exportExcel = useCallback(async () => {
+    if (!isPro) {
+      openPaywall('export_excel');
+      return;
+    }
     if (!expenses.length) {
-      Alert.alert('Nothing to export', 'Add some expenses first.');
+      showAlert({
+        icon: '📤',
+        title: 'Nothing to export',
+        message: 'Add some expenses first.',
+      });
       return;
     }
     setExporting(true);
     try {
-      const csv = expensesToCsv(expenses);
-      const name = buildExportFileName('csv');
-      await Share.share({
-        title: name,
-        message: Platform.OS === 'ios' ? csv : `Expenso export (${name})\n\n${csv}`,
+      await exportAndShareExcel(expenses, {
+        isJoint,
+        accountLabel: isJoint ? 'Joint account' : 'Personal',
       });
     } catch (e: any) {
-      Alert.alert('Export failed', e?.message || 'Try again');
+      showAlert({
+        icon: '📤',
+        title: 'Couldn’t export',
+        message: userFacingError(e, 'Couldn’t create the Excel file. Please try again.'),
+      });
     } finally {
       setExporting(false);
     }
-  }, [expenses]);
+  }, [expenses, isJoint, showAlert, isPro, openPaywall]);
 
-  const exportPdf = useCallback(() => {
-    Alert.alert(
-      'PDF export — Pro',
-      'Nice PDF reports (monthly summary + charts) are planned for Expenso Pro. CSV export is free for now.',
-    );
-  }, []);
-
-  const sendFeedback = useCallback(async () => {
-    const subject = encodeURIComponent('Expenso feedback');
-    const body = encodeURIComponent(
-      `Hi Expenso team,\n\nMy feedback:\n\n\n---\nApp: Expenso\nPlatform: ${Platform.OS}`,
-    );
-    const url = `mailto:kartikrathor.work@gmail.com?subject=${subject}&body=${body}`;
-    try {
-      const can = await Linking.canOpenURL(url);
-      if (!can) {
-        Alert.alert('Email', 'No email app found. Write to kartikrathor.work@gmail.com');
-        return;
-      }
-      await Linking.openURL(url);
-    } catch {
-      Alert.alert('Email', 'Could not open mail app.');
+  const exportPdf = useCallback(async () => {
+    if (!isPro) {
+      openPaywall('export_pdf');
+      return;
     }
-  }, []);
+    if (!expenses.length) {
+      showAlert({
+        icon: '📄',
+        title: 'Nothing to export',
+        message: 'Add some expenses first.',
+      });
+      return;
+    }
+    setExportingPdf(true);
+    try {
+      await exportAndSharePdf(expenses, {
+        isJoint,
+        accountLabel: isJoint ? 'Joint account' : 'Personal',
+      });
+    } catch (e: any) {
+      showAlert({
+        icon: '📄',
+        title: 'Couldn’t export',
+        message: userFacingError(e, 'Couldn’t create the PDF. Please try again.'),
+      });
+    } finally {
+      setExportingPdf(false);
+    }
+  }, [expenses, isJoint, showAlert, isPro, openPaywall]);
 
   const shareApp = useCallback(async () => {
     try {
@@ -258,6 +467,7 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
                     ? 'Lock is off — toggle to enable'
                     : 'Protect the app with a PIN'
               }
+              pro={!isPro}
               right={
                 <Switch
                   value={enabled}
@@ -285,13 +495,13 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
                   subtitle={
                     enabled
                       ? `Use ${bio.label} instead of typing PIN`
-                      : 'Turn on App lock first'
+                      : 'Set App lock PIN first — then enable this'
                   }
+                  pro={!isPro}
                   right={
                     <Switch
                       value={biometricEnabled && enabled}
                       onValueChange={onToggleBiometric}
-                      disabled={!enabled}
                       trackColor={{ false: colors.border, true: colors.primary + '99' }}
                       thumbColor={
                         biometricEnabled && enabled ? colors.primaryLight : colors.textMuted
@@ -311,12 +521,50 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
             ) : null}
           </View>
 
+          {showJointNotifPrefs ? (
+            <>
+              <Text style={styles.section}>Joint notifications</Text>
+              <View style={styles.card}>
+                <SettingsRow
+                  title="Notify partner when I add"
+                  subtitle="Partner gets a push with your name and what you added"
+                  right={
+                    <Switch
+                      value={notifyPartnerOnMyJointAdd}
+                      onValueChange={onToggleNotifyPartner}
+                      trackColor={{ false: colors.border, true: colors.primary + '99' }}
+                      thumbColor={
+                        notifyPartnerOnMyJointAdd ? colors.primaryLight : colors.textMuted
+                      }
+                    />
+                  }
+                />
+                <View style={styles.divider} />
+                <SettingsRow
+                  title="Notify me when partner adds"
+                  subtitle="You’ll get a push with their name and the expense"
+                  right={
+                    <Switch
+                      value={notifyMeOnPartnerJointAdd}
+                      onValueChange={onToggleNotifyMe}
+                      trackColor={{ false: colors.border, true: colors.primary + '99' }}
+                      thumbColor={
+                        notifyMeOnPartnerJointAdd ? colors.primaryLight : colors.textMuted
+                      }
+                    />
+                  }
+                />
+              </View>
+            </>
+          ) : null}
+
           <Text style={styles.section}>Export</Text>
           <View style={styles.card}>
             <SettingsRow
-              title="Export Excel (CSV)"
-              subtitle={`${expenses.length} expense${expenses.length === 1 ? '' : 's'}${isJoint ? ' · includes joint' : ''}`}
-              onPress={exportCsv}
+              title="Export Excel"
+              subtitle={`${expenses.length} expense${expenses.length === 1 ? '' : 's'} · .xlsx file${isJoint ? ' · includes joint' : ''}`}
+              pro={!isPro}
+              onPress={exportExcel}
               right={
                 exporting ? (
                   <ActivityIndicator color={colors.primaryLight} />
@@ -328,9 +576,16 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
             <View style={styles.divider} />
             <SettingsRow
               title="Export PDF report"
-              subtitle="Monthly summary with charts"
+              subtitle="Summary + category & full expense list"
+              pro={!isPro}
               onPress={exportPdf}
-              pro
+              right={
+                exportingPdf ? (
+                  <ActivityIndicator color={colors.primaryLight} />
+                ) : (
+                  <Text style={{ fontSize: 22, color: colors.textMuted, fontWeight: '600' }}>›</Text>
+                )
+              }
             />
           </View>
 
@@ -338,8 +593,37 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
           <View style={styles.card}>
             <SettingsRow
               title="Send feedback"
-              subtitle="Bugs, ideas, or love notes"
-              onPress={sendFeedback}
+              subtitle="Ideas, bugs, or love notes"
+              onPress={() => setFeedbackOpen(true)}
+            />
+            <View style={styles.divider} />
+            <SettingsRow
+              title="Help & support"
+              subtitle={
+                supportUnread > 0
+                  ? `${supportUnread} new reply${supportUnread === 1 ? '' : 's'} from support`
+                  : 'Open a ticket · track replies here'
+              }
+              onPress={() => setSupportOpen(true)}
+              right={
+                supportUnread > 0 ? (
+                  <View
+                    style={{
+                      minWidth: 22,
+                      height: 22,
+                      borderRadius: 11,
+                      backgroundColor: colors.primary,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      paddingHorizontal: 6,
+                    }}
+                  >
+                    <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '800' }}>
+                      {supportUnread > 9 ? '9+' : supportUnread}
+                    </Text>
+                  </View>
+                ) : undefined
+              }
             />
             <View style={styles.divider} />
             <SettingsRow
@@ -349,46 +633,153 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
             />
           </View>
 
-          <Text style={styles.section}>Coming in Pro</Text>
+          <Text style={styles.section}>Look & feel</Text>
+          <Pressable
+            onPress={() => setThemesOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Custom themes"
+            style={({ pressed }) => [styles.themesCtaWrap, pressed && styles.themesCtaPressed]}
+          >
+            <LinearGradient
+              colors={[
+                colors.gradientStart + '55',
+                colors.primary + '28',
+                colors.gradientEnd + '40',
+              ]}
+              {...(gradientPoints
+                ? { start: gradientPoints.start, end: gradientPoints.end }
+                : { start: { x: 0, y: 0 }, end: { x: 1, y: 1 } })}
+              style={styles.themesCta}
+            >
+              <View style={styles.themesCtaGlow} />
+              <View style={styles.themesCtaTop}>
+                <View style={styles.swatchRow}>
+                  {themeSwatches.map(([a, b], i) => (
+                    <LinearGradient
+                      key={i}
+                      colors={[a, b]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={[styles.swatch, { marginLeft: i === 0 ? 0 : -10, zIndex: 5 - i }]}
+                    />
+                  ))}
+                </View>
+                {!isPro ? (
+                  <View style={styles.themesProPill}>
+                    <Text style={styles.themesProText}>PRO PACKS</Text>
+                  </View>
+                ) : (
+                  <View style={[styles.themesProPill, styles.themesLivePill]}>
+                    <Text style={[styles.themesProText, styles.themesLiveText]}>ACTIVE</Text>
+                  </View>
+                )}
+              </View>
+
+              <Text style={styles.themesTitle}>Custom themes</Text>
+              <Text style={styles.themesSub}>
+                Now using {packMeta.name}
+                {packMeta.subtitle ? ` · ${packMeta.subtitle}` : ''}
+              </Text>
+
+              <View style={styles.themesFooter}>
+                <LinearGradient
+                  colors={[colors.gradientStart, colors.gradientEnd]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.themesBrowseBtn}
+                >
+                  <Text style={styles.themesBrowseText}>Browse looks</Text>
+                </LinearGradient>
+                <Text style={styles.themesChevron}>›</Text>
+              </View>
+            </LinearGradient>
+          </Pressable>
+
+          <Text style={styles.footerNote}>
+            Excel (.xlsx) and PDF open in Sheets / Drive / WhatsApp as real files. PIN &
+            biometric stay on this device only.
+          </Text>
+
+          <Text style={styles.section}>Legal</Text>
           <View style={styles.card}>
             <SettingsRow
-              title="Cloud backup & sync"
-              subtitle="Restore on a new phone"
-              pro
-              onPress={() =>
-                Alert.alert('Pro', 'Full cloud backup beyond joint sync is planned for Pro.')
-              }
+              title="Privacy Policy"
+              subtitle="How we handle your data"
+              onPress={() => Linking.openURL(LEGAL_PRIVACY_URL)}
             />
             <View style={styles.divider} />
             <SettingsRow
-              title="Unlimited AI precise answers"
-              subtitle="Higher daily Ask AI limits"
-              pro
-              onPress={() =>
-                Alert.alert('Pro', 'Higher AI token limits will ship with Expenso Pro.')
-              }
-            />
-            <View style={styles.divider} />
-            <SettingsRow
-              title="Custom themes & widgets"
-              subtitle="Home-screen spending widget"
-              pro
-              onPress={() => Alert.alert('Pro', 'Widgets & extra themes are on the Pro roadmap.')}
+              title="Terms of Service"
+              subtitle="Rules for using Expenso"
+              onPress={() => Linking.openURL(LEGAL_TERMS_URL)}
             />
           </View>
 
-          <Text style={styles.footerNote}>
-            CSV opens in Excel / Google Sheets. PIN & biometric stay on this device only.
-          </Text>
+          <Text style={styles.section}>Account</Text>
+          <View style={styles.card}>
+            <SettingsRow
+              title={authBusy ? 'Signing out…' : 'Log out'}
+              subtitle="Sign out of this device"
+              danger
+              onPress={async () => {
+                if (authBusy) return;
+                await logout();
+                onClose();
+              }}
+            />
+          </View>
         </ScrollView>
       </View>
 
-      <Modal visible={pinModal} transparent animationType="fade" onRequestClose={() => setPinModal(false)}>
+      <AppAlertModal
+        visible={!!alert}
+        title={alert?.title || ''}
+        message={alert?.message || ''}
+        icon={alert?.icon}
+        buttons={alert?.buttons}
+        onClose={() => setAlert(null)}
+      />
+
+      <FeedbackModal
+        visible={feedbackOpen}
+        onClose={() => setFeedbackOpen(false)}
+        onSent={() =>
+          showAlert({
+            icon: '💌',
+            title: 'Thanks!',
+            message: 'Thanks! Your feedback was sent to our team.',
+          })
+        }
+      />
+
+      <SupportModal
+        visible={supportOpen}
+        onClose={() => setSupportOpen(false)}
+        onUnreadChange={setSupportUnread}
+      />
+
+      <ThemesScreen visible={themesOpen} onClose={() => setThemesOpen(false)} />
+
+      <Modal
+        visible={pinModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setPendingBioAfterPin(false);
+          setPinModal(false);
+        }}
+      >
         <View style={styles.pinBackdrop}>
           <View style={[styles.pinCard, { backgroundColor: colors.surface }]}>
             <Text style={[styles.pinTitle, { color: colors.text }]}>
               {hasPin ? 'Change PIN' : 'Create PIN'}
             </Text>
+            {pendingBioAfterPin ? (
+              <Text style={[styles.pinHint, { color: colors.textSecondary }]}>
+                Set this PIN first so {bio?.label || 'biometric'} unlock can turn on. It also
+                stays as your backup if biometrics fail.
+              </Text>
+            ) : null}
             <TextInput
               style={[styles.pinInput, { color: colors.text, borderColor: colors.border }]}
               value={pin}
@@ -410,7 +801,12 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
               placeholderTextColor={colors.textMuted}
             />
             <View style={styles.pinActions}>
-              <Pressable onPress={() => setPinModal(false)}>
+              <Pressable
+                onPress={() => {
+                  setPendingBioAfterPin(false);
+                  setPinModal(false);
+                }}
+              >
                 <Text style={{ color: colors.textSecondary, fontWeight: '600' }}>Cancel</Text>
               </Pressable>
               <Pressable onPress={savePin}>
@@ -481,6 +877,96 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       marginBottom: Spacing.lg,
     },
     divider: { height: 1, backgroundColor: colors.border },
+    themesCtaWrap: {
+      marginBottom: Spacing.lg,
+      borderRadius: Radius.xl + 2,
+      overflow: 'hidden',
+    },
+    themesCtaPressed: { opacity: 0.92, transform: [{ scale: 0.985 }] },
+    themesCta: {
+      borderRadius: Radius.xl + 2,
+      padding: Spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.primary + '44',
+      overflow: 'hidden',
+      minHeight: 148,
+    },
+    themesCtaGlow: {
+      position: 'absolute',
+      top: -40,
+      right: -30,
+      width: 140,
+      height: 140,
+      borderRadius: 70,
+      backgroundColor: colors.accent + '22',
+    },
+    themesCtaTop: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: Spacing.md,
+    },
+    swatchRow: { flexDirection: 'row', alignItems: 'center' },
+    swatch: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      borderWidth: 2,
+      borderColor: colors.surface,
+    },
+    themesProPill: {
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: Radius.full,
+      backgroundColor: colors.warning + '28',
+      borderWidth: 1,
+      borderColor: colors.warning + '66',
+    },
+    themesProText: {
+      fontSize: 10,
+      fontWeight: '800',
+      color: colors.warning,
+      letterSpacing: 0.7,
+    },
+    themesLivePill: {
+      backgroundColor: colors.success + '22',
+      borderColor: colors.success + '55',
+    },
+    themesLiveText: { color: colors.success },
+    themesTitle: {
+      ...Typography.h3,
+      color: colors.text,
+      letterSpacing: -0.3,
+      marginBottom: 4,
+    },
+    themesSub: {
+      ...Typography.caption,
+      color: colors.textSecondary,
+      lineHeight: 18,
+      marginBottom: Spacing.md,
+    },
+    themesFooter: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    themesBrowseBtn: {
+      paddingHorizontal: Spacing.md,
+      paddingVertical: Spacing.sm + 2,
+      borderRadius: Radius.full,
+    },
+    themesBrowseText: {
+      ...Typography.caption,
+      color: '#FFF',
+      fontWeight: '800',
+      letterSpacing: 0.2,
+    },
+    themesChevron: {
+      fontSize: 26,
+      fontWeight: '600',
+      color: colors.primaryLight,
+      marginRight: 2,
+    },
     footerNote: {
       ...Typography.caption,
       color: colors.textMuted,
@@ -497,8 +983,15 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderRadius: Radius.xl,
       padding: Spacing.lg,
       gap: Spacing.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
     },
     pinTitle: { ...Typography.h3, marginBottom: Spacing.sm },
+    pinHint: {
+      ...Typography.caption,
+      lineHeight: 18,
+      marginBottom: Spacing.md,
+    },
     pinInput: {
       borderWidth: 1,
       borderRadius: Radius.lg,

@@ -7,7 +7,6 @@ import {
   TextInput,
   Pressable,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import LinearGradient from 'react-native-linear-gradient';
@@ -25,6 +24,11 @@ import { ThemeToggle } from '../components/ThemeToggle';
 import { shareInviteViaWhatsApp, shareInviteCode } from '../utils/shareInvite';
 import { CATEGORIES } from '../constants/categories';
 import { SettingsScreen } from './SettingsScreen';
+import { AppAlertModal, AppAlertContent } from '../components/AppAlertModal';
+import { useNotificationNavStore } from '../store/notificationNavStore';
+import { userFacingError } from '../utils/userFacingError';
+import { SilkFluidOverlay } from '../components/SilkFluidOverlay';
+import { useIsFocused } from '@react-navigation/native';
 
 const KEEP_KEYS = new Set([
   '@expenso_auth_token',
@@ -37,9 +41,9 @@ export function ProfileScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const bottomPad = getTabBarBottomInset(insets.bottom);
+  const isFocused = useIsFocused();
 
   const user = useAuthStore(s => s.user);
-  const logout = useAuthStore(s => s.logout);
   const clearAllData = useAuthStore(s => s.clearAllData);
   const authBusy = useAuthStore(s => s.isBusy);
 
@@ -56,10 +60,22 @@ export function ProfileScreen() {
   const [sharing, setSharing] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [alert, setAlert] = useState<AppAlertContent | null>(null);
+  const openSupportFromPush = useNotificationNavStore(s => s.openSupport);
+
+  const showAlert = useCallback((content: AppAlertContent) => {
+    setAlert(content);
+  }, []);
 
   useEffect(() => {
     if (user) loadJoint();
   }, [user, loadJoint]);
+
+  useEffect(() => {
+    if (openSupportFromPush) {
+      setSettingsOpen(true);
+    }
+  }, [openSupportFromPush]);
 
   const handleCreateJoint = useCallback(async () => {
     clearJointError();
@@ -93,26 +109,28 @@ export function ProfileScreen() {
     }
   }, [joint]);
 
-  const handleLogout = useCallback(async () => {
-    await logout();
-  }, [logout]);
-
   const handleLeaveJoint = useCallback(() => {
-    Alert.alert(
-      'Leave joint account?',
-      'You will separate from your partner. Shared expenses stay with them. You can create or join another joint account later.',
-      [
-        { text: 'Cancel', style: 'cancel' },
+    showAlert({
+      icon: '👋',
+      title: 'Leave joint account?',
+      message:
+        'You will separate from your partner. Shared expenses stay with them. You can create or join another joint account later.',
+      buttons: [
+        { label: 'Cancel', variant: 'secondary' },
         {
-          text: 'Leave',
-          style: 'destructive',
+          label: 'Leave',
+          variant: 'danger',
           onPress: async () => {
             setActionBusy(true);
             clearJointError();
             try {
               const ok = await leaveJointAccount();
               if (!ok) {
-                Alert.alert('Could not leave', useJointStore.getState().error || 'Try again');
+                showAlert({
+                  icon: '⚠️',
+                  title: 'Couldn’t leave',
+                  message: useJointStore.getState().error || 'Please try again.',
+                });
               }
             } finally {
               setActionBusy(false);
@@ -120,8 +138,8 @@ export function ProfileScreen() {
           },
         },
       ],
-    );
-  }, [leaveJointAccount, clearJointError]);
+    });
+  }, [leaveJointAccount, clearJointError, showAlert]);
 
   const wipeLocalData = useCallback(async (userId: string) => {
     // Cancel any pending Ask-chat re-save first, then wipe storage + in-memory UI
@@ -167,48 +185,66 @@ export function ProfileScreen() {
   }, []);
 
   const handleDeleteAllData = useCallback(() => {
-    Alert.alert(
-      'Delete all my data?',
-      'This permanently deletes your personal expenses, budget, activity, and Ask chat history. Your login account stays. Joint account membership is kept.',
-      [
-        { text: 'Cancel', style: 'cancel' },
+    showAlert({
+      icon: '🗑️',
+      title: 'Delete all my data?',
+      message:
+        'This permanently deletes your personal expenses, budget, activity, and Ask chat history. Your login account stays. Joint account membership is kept.',
+      buttons: [
+        { label: 'Cancel', variant: 'secondary' },
         {
-          text: 'Delete my data',
-          style: 'destructive',
+          label: 'Delete my data',
+          variant: 'danger',
           onPress: () => {
-            Alert.alert(
-              'Are you sure?',
-              'Account login will remain. Only your data will be wiped. This cannot be undone.',
-              [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                  text: 'Yes, clear data',
-                  style: 'destructive',
-                  onPress: async () => {
-                    if (!user?.id) return;
-                    setActionBusy(true);
-                    try {
-                      await clearAllData();
-                      await wipeLocalData(user.id);
-                      setTimeout(() => {
-                        Alert.alert('Done', 'All your data was cleared. You are still logged in.');
-                      }, 250);
-                    } catch (err: any) {
-                      setTimeout(() => {
-                        Alert.alert('Clear failed', err?.message || 'Try again');
-                      }, 250);
-                    } finally {
-                      setActionBusy(false);
-                    }
+            // Chain second confirm after first modal closes
+            setTimeout(() => {
+              showAlert({
+                icon: '⚠️',
+                title: 'Are you sure?',
+                message:
+                  'Account login will remain. Only your data will be wiped. This cannot be undone.',
+                buttons: [
+                  { label: 'Cancel', variant: 'secondary' },
+                  {
+                    label: 'Yes, clear data',
+                    variant: 'danger',
+                    onPress: async () => {
+                      if (!user?.id) return;
+                      setActionBusy(true);
+                      try {
+                        await clearAllData();
+                        await wipeLocalData(user.id);
+                        setTimeout(() => {
+                          showAlert({
+                            icon: '✅',
+                            title: 'Done',
+                            message: 'All your data was cleared. You are still logged in.',
+                          });
+                        }, 250);
+                      } catch (err: any) {
+                        setTimeout(() => {
+                          showAlert({
+                            icon: '⚠️',
+                            title: 'Couldn’t clear data',
+                            message: userFacingError(
+                              err,
+                              'Couldn’t clear your data. Please try again.',
+                            ),
+                          });
+                        }, 250);
+                      } finally {
+                        setActionBusy(false);
+                      }
+                    },
                   },
-                },
-              ],
-            );
+                ],
+              });
+            }, 80);
           },
         },
       ],
-    );
-  }, [clearAllData, wipeLocalData, user?.id]);
+    });
+  }, [clearAllData, wipeLocalData, user?.id, showAlert]);
 
   if (!user) {
     return (
@@ -227,6 +263,9 @@ export function ProfileScreen() {
         colors={[colors.primary + '18', colors.background, colors.background]}
         style={StyleSheet.absoluteFill}
       />
+      <View style={styles.silkHeaderWash} pointerEvents="none">
+        <SilkFluidOverlay active={isFocused} fill={0.92} intensity="medium" />
+      </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -242,6 +281,7 @@ export function ProfileScreen() {
         </View>
 
         <View style={styles.card}>
+          <SilkFluidOverlay active={isFocused} fill={0.75} intensity="bold" />
           <View style={styles.profileRow}>
             <View style={[styles.avatar, { backgroundColor: user.avatarColor }]}>
               <Text style={styles.avatarText}>{user.name.charAt(0).toUpperCase()}</Text>
@@ -251,24 +291,33 @@ export function ProfileScreen() {
               <Text style={styles.profileEmail}>{user.email}</Text>
             </View>
           </View>
-          <Pressable style={styles.logoutBtn} onPress={handleLogout} disabled={busy}>
-            <Text style={styles.logoutText}>Logout</Text>
-          </Pressable>
         </View>
 
         <Pressable
-          style={styles.settingsBtn}
           onPress={() => setSettingsOpen(true)}
           accessibilityRole="button"
           accessibilityLabel="Open settings"
+          style={({ pressed }) => [styles.settingsBtn, pressed && styles.settingsBtnPressed]}
         >
-          <View style={{ flex: 1 }}>
+          <View style={styles.settingsIconWrap}>
+            <LinearGradient
+              colors={[colors.primary, colors.accent]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.settingsIconGrad}
+            >
+              <Text style={styles.settingsIcon}>⚙️</Text>
+            </LinearGradient>
+          </View>
+          <View style={styles.settingsTextCol}>
             <Text style={styles.settingsTitle}>Settings</Text>
             <Text style={styles.settingsSub}>
-              App lock · Export · Feedback · Share
+              App lock · Notifications · Export · Feedback
             </Text>
           </View>
-          <Text style={styles.settingsChevron}>›</Text>
+          <View style={styles.settingsChevronWrap}>
+            <Text style={styles.settingsChevron}>›</Text>
+          </View>
         </Pressable>
 
         <Text style={styles.sectionTitle}>💑 Joint Account</Text>
@@ -419,6 +468,14 @@ export function ProfileScreen() {
       </ScrollView>
 
       <SettingsScreen visible={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <AppAlertModal
+        visible={!!alert}
+        title={alert?.title || ''}
+        message={alert?.message || ''}
+        icon={alert?.icon}
+        buttons={alert?.buttons}
+        onClose={() => setAlert(null)}
+      />
     </View>
   );
 }
@@ -426,12 +483,21 @@ export function ProfileScreen() {
 function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
+    silkHeaderWash: {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      right: 0,
+      height: 260,
+      overflow: 'hidden',
+    },
     scroll: { padding: Spacing.lg },
     headerRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'flex-start',
       marginBottom: Spacing.lg,
+      zIndex: 1,
     },
     title: { ...Typography.h1, color: colors.text },
     subtitle: { ...Typography.caption, color: colors.textSecondary, marginTop: 4, maxWidth: 240 },
@@ -442,6 +508,9 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderWidth: 1,
       borderColor: colors.border,
       marginBottom: Spacing.lg,
+      overflow: 'hidden',
+      position: 'relative',
+      minHeight: 88,
     },
     label: {
       ...Typography.caption,
@@ -482,7 +551,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       backgroundColor: '#25D366',
     },
     whatsappBtnText: { ...Typography.bodyBold, color: '#FFF' },
-    profileRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md },
+    profileRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.md, zIndex: 1 },
     avatar: {
       width: 56,
       height: 56,
@@ -494,29 +563,54 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     profileInfo: { flex: 1 },
     profileName: { ...Typography.h3, color: colors.text },
     profileEmail: { ...Typography.caption, color: colors.textMuted, marginTop: 2 },
-    logoutBtn: {
-      marginTop: Spacing.md,
-      alignSelf: 'flex-start',
-      paddingHorizontal: Spacing.md,
-      paddingVertical: Spacing.sm,
-      borderRadius: Radius.full,
-      backgroundColor: colors.danger + '18',
-    },
-    logoutText: { ...Typography.caption, color: colors.danger, fontWeight: '700' },
     settingsBtn: {
       flexDirection: 'row',
       alignItems: 'center',
       backgroundColor: colors.surface,
       borderRadius: Radius.xl,
-      padding: Spacing.lg,
-      borderWidth: 1,
-      borderColor: colors.border,
+      paddingVertical: Spacing.md,
+      paddingHorizontal: Spacing.md,
+      borderWidth: 1.5,
+      borderColor: colors.primary + '45',
       marginBottom: Spacing.lg,
       gap: Spacing.md,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.18,
+      shadowRadius: 10,
+      elevation: 4,
     },
-    settingsTitle: { ...Typography.bodyBold, color: colors.text },
-    settingsSub: { ...Typography.caption, color: colors.textMuted, marginTop: 2 },
-    settingsChevron: { fontSize: 28, color: colors.textMuted, fontWeight: '300', marginTop: -2 },
+    settingsBtnPressed: {
+      opacity: 0.88,
+      transform: [{ scale: 0.985 }],
+      borderColor: colors.primary + '70',
+    },
+    settingsIconWrap: {
+      borderRadius: 16,
+      overflow: 'hidden',
+    },
+    settingsIconGrad: {
+      width: 48,
+      height: 48,
+      borderRadius: 16,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    settingsIcon: { fontSize: 22 },
+    settingsTextCol: { flex: 1 },
+    settingsTitle: { ...Typography.bodyBold, color: colors.text, fontSize: 17 },
+    settingsSub: { ...Typography.caption, color: colors.textMuted, marginTop: 3, lineHeight: 17 },
+    settingsChevronWrap: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primary + '18',
+      borderWidth: 1,
+      borderColor: colors.primary + '35',
+    },
+    settingsChevron: { fontSize: 22, color: colors.primaryLight, fontWeight: '600', marginTop: -1 },
     sectionTitle: { ...Typography.h3, color: colors.text, marginBottom: Spacing.xs },
     sectionHint: {
       ...Typography.caption,

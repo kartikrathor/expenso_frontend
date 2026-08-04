@@ -27,6 +27,7 @@ import {
   stopVoiceRecognition,
 } from '../services/voiceService';
 import { parseExpenseText } from '../utils/expenseParser';
+import { userFacingError } from '../utils/userFacingError';
 import { Radius, Spacing, Typography } from '../constants/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useAppAlert } from './AppAlert';
@@ -51,10 +52,10 @@ async function requestMicPermission(): Promise<boolean> {
   const granted = await PermissionsAndroid.request(
     PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
     {
-      title: 'Microphone Permission',
-      message: 'Hold mic to speak and add expense by voice',
+      title: 'Allow microphone',
+      message: 'Expenso uses the mic so you can add expenses by speaking.',
       buttonPositive: 'Allow',
-      buttonNegative: 'Deny',
+      buttonNegative: 'Not now',
     },
   );
   return granted === PermissionsAndroid.RESULTS.GRANTED;
@@ -125,8 +126,8 @@ export function HoldMicFab({ onSave }: HoldMicFabProps) {
       const parsed = parseExpenseText(trimmed);
       if (!parsed.amount || parsed.amount <= 0) {
         showAlert(
-          'Amount Not Recognised',
-          `Could not find an amount in:\n"${trimmed}"\n\nTry saying something like "Blinkit 200"`,
+          'No amount heard',
+          `We heard “${trimmed}” but couldn’t find an amount.\n\nTry saying something like “Blinkit 200”.`,
           undefined,
           '⚠️',
         );
@@ -146,7 +147,12 @@ export function HoldMicFab({ onSave }: HoldMicFabProps) {
         });
         haptic('notificationSuccess');
       } catch {
-        showAlert('Save Failed', 'Could not save the expense. Please try again.', undefined, '❌');
+        showAlert(
+          'Couldn’t save',
+          'Your expense wasn’t saved. Please check your connection and try again.',
+          undefined,
+          '❌',
+        );
       } finally {
         setSaving(false);
       }
@@ -172,7 +178,12 @@ export function HoldMicFab({ onSave }: HoldMicFabProps) {
     if (!permitted) {
       holdingRef.current = false;
       scale.value = withSpring(1);
-      showAlert('Permission Required', 'Microphone access is needed for voice entry.', undefined, '🎙️');
+      showAlert(
+        'Microphone needed',
+        'Please allow microphone access in your phone settings to add expenses by voice.',
+        undefined,
+        '🎙️',
+      );
       return;
     }
 
@@ -209,7 +220,12 @@ export function HoldMicFab({ onSave }: HoldMicFabProps) {
       setListening(false);
       stopPulse();
       scale.value = withSpring(1);
-      showAlert('Voice Error', err?.message ? String(err.message) : 'Could not start the microphone. Please try again.', undefined, '❌');
+      showAlert(
+        'Voice input',
+        userFacingError(err, 'Couldn’t start the microphone. Please try again.'),
+        undefined,
+        '❌',
+      );
     }
   }, [saving, scale, startPulse, stopPulse]);
 

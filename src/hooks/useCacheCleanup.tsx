@@ -17,8 +17,8 @@ interface UseCacheCleanupResult {
 }
 
 export function useCacheCleanup(enabled: boolean): UseCacheCleanupResult {
-  const expenses = useExpenseStore(s => s.expenses);
-  const count = expenses.length;
+  // Length only — avoid re-rendering App on every expense object change
+  const count = useExpenseStore(s => s.expenses.length);
 
   const [visible, setVisible] = useState(false);
   const [mode, setMode] = useState<CacheCleanupMode>('suggest');

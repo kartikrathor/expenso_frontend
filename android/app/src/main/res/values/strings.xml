@@ -1,3 +1,26 @@
 <resources>
     <string name="app_name">Expenso</string>
+    <string name="widget_description">Quick-add with type or voice — see today &amp; last expenses</string>
+    <string name="widget_add_expense">+ Add expense</string>
+    <string name="widget_add_expense_short">Add expense</string>
+    <string name="widget_account_default">Personal</string>
+    <string name="widget_recent_title">LAST EXPENSES</string>
+    <string name="widget_empty">No expenses yet — add one below</string>
+    <string name="widget_sync">Sync</string>
+    <string name="widget_syncing">…</string>
+    <string name="widget_today_label">TODAY</string>
+    <string name="widget_today_hint">Spent so far today</string>
+    <string name="widget_amount_placeholder">₹0</string>
+    <string name="widget_mic_action">🎙  Speak</string>
+    <string name="widget_today_action">Today</string>
+    <string name="quick_add_title">Quick add</string>
+    <string name="quick_add_subtitle">Type or hold mic — saves without opening the full app</string>
+    <string name="quick_add_hint">e.g. Blinkit 200</string>
+    <string name="quick_add_hold_mic">🎙 Hold to speak</string>
+    <string name="quick_add_save">Save</string>
+    <string name="quick_add_cancel">Cancel</string>
+    <string name="quick_add_listening">Listening… speak now</string>
+    <string name="quick_add_saving">Saving…</string>
+    <string name="quick_add_need_sign_in">Open Expenso and sign in first</string>
+    <string name="quick_add_need_amount">Include an amount, e.g. Blinkit 200</string>
 </resources>

@@ -28,6 +28,7 @@ import {
 import { Radius, Spacing, Typography } from '../constants/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useAppAlert } from './AppAlert';
+import { userFacingError } from '../utils/userFacingError';
 
 interface VoiceButtonProps {
   onResult: (text: string) => void;
@@ -51,10 +52,10 @@ async function requestMicPermission(): Promise<boolean> {
   const granted = await PermissionsAndroid.request(
     PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
     {
-      title: 'Microphone Permission',
-      message: 'Expense Management needs mic access for voice expense entry',
+      title: 'Allow microphone',
+      message: 'Expenso uses the mic so you can add expenses by speaking.',
       buttonPositive: 'Allow',
-      buttonNegative: 'Deny',
+      buttonNegative: 'Not now',
     },
   );
   return granted === PermissionsAndroid.RESULTS.GRANTED;
@@ -158,7 +159,12 @@ export function VoiceButton({ onResult, onListeningChange }: VoiceButtonProps) {
 
     const permitted = await requestMicPermission();
     if (!permitted) {
-      showAlert('Permission Required', 'Microphone access is needed for voice entry.', undefined, '🎙️');
+      showAlert(
+        'Microphone needed',
+        'Please allow microphone access in your phone settings to add expenses by voice.',
+        undefined,
+        '🎙️',
+      );
       return;
     }
 
@@ -189,8 +195,11 @@ export function VoiceButton({ onResult, onListeningChange }: VoiceButtonProps) {
           onListeningChange?.(false);
           stopPulse();
           showAlert(
-            'Voice Error',
-            `${msg}\n\nTips: Make sure internet is on, microphone permission is granted, and speak clearly.`,
+            'Voice input',
+            userFacingError(
+              msg,
+              'Couldn’t hear clearly. Check the mic, speak a bit louder, and try again.',
+            ),
             undefined,
             '❌',
           );
@@ -202,8 +211,12 @@ export function VoiceButton({ onResult, onListeningChange }: VoiceButtonProps) {
       setBusy(false);
       onListeningChange?.(false);
       stopPulse();
-      const message = err?.message ? String(err.message) : 'Could not start the microphone. Please try again.';
-      showAlert('Voice Error', message, undefined, '❌');
+      showAlert(
+        'Voice input',
+        userFacingError(err, 'Couldn’t start the microphone. Please try again.'),
+        undefined,
+        '❌',
+      );
     }
   };
 

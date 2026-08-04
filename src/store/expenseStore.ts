@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { InteractionManager } from 'react-native';
 import { create } from 'zustand';
 import { Expense, MerchantId, TimeFilter, CategoryId } from '../types/expense';
 import {
@@ -72,20 +73,15 @@ const CATEGORY_COLORS: Record<string, string> = {
   transport: '#38BDF8',
   entertainment: '#FBBF24',
   bills: '#06B6D4',
+  rent: '#A78BFA',
+  taxes: '#FB923C',
+  gifts: '#E879F9',
+  donation: '#34D399',
+  insurance: '#0EA5E9',
+  personal_care: '#D946EF',
   health: '#F87171',
   other: '#94A3B8',
 };
-
-const CATEGORIES: CategoryId[] = [
-  'food',
-  'groceries',
-  'shopping',
-  'transport',
-  'entertainment',
-  'bills',
-  'health',
-  'other',
-];
 
 function getFilterDate(filter: TimeFilter): Date | null {
   const now = new Date();
@@ -102,9 +98,8 @@ function authToken(): string | null {
 }
 
 function toExpense(raw: ServerExpense): Expense {
-  const cat = CATEGORIES.includes(raw.category as CategoryId)
-    ? (raw.category as CategoryId)
-    : 'other';
+  // Keep any category slug (including user custom); blank → other
+  const cat = (raw.category?.trim() || 'other') as CategoryId;
   const date = typeof raw.date === 'string' ? raw.date : new Date(raw.date).toISOString();
   const createdAt = raw.createdAt
     ? typeof raw.createdAt === 'string'
@@ -124,10 +119,24 @@ function toExpense(raw: ServerExpense): Expense {
   };
 }
 
-async function persistCache(userId: string | null, expenses: Expense[], budget: number) {
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingPersist: { userId: string; expenses: Expense[]; budget: number } | null = null;
+
+/** Debounced + after-interactions write so add/edit doesn't hitch the UI thread. */
+function persistCache(userId: string | null, expenses: Expense[], budget: number) {
   if (!userId) return;
-  await AsyncStorage.setItem(expensesKey(userId), JSON.stringify(expenses));
-  await AsyncStorage.setItem(budgetKey(userId), String(budget));
+  pendingPersist = { userId, expenses, budget };
+  if (persistTimer) clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    const job = pendingPersist;
+    pendingPersist = null;
+    persistTimer = null;
+    if (!job) return;
+    InteractionManager.runAfterInteractions(() => {
+      void AsyncStorage.setItem(expensesKey(job.userId), JSON.stringify(job.expenses));
+      void AsyncStorage.setItem(budgetKey(job.userId), String(job.budget));
+    });
+  }, 400);
 }
 
 async function readCache(userId: string): Promise<{ expenses: Expense[]; monthlyBudget: number }> {
@@ -384,7 +393,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     const token = authToken();
     const userId = get().activeUserId;
     if (!token || !userId) {
-      throw new Error('Not logged in');
+      throw new Error('Please sign in again to continue.');
     }
 
     const res = await apiRequest<{ expense: ServerExpense }>('/api/expenses', {
@@ -411,7 +420,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
   updateExpense: async (id, changes) => {
     const token = authToken();
     const userId = get().activeUserId;
-    if (!token || !userId) throw new Error('Not logged in');
+    if (!token || !userId) throw new Error('Please sign in again to continue.');
 
     const res = await apiRequest<{ expense: ServerExpense }>(`/api/expenses/${id}`, {
       method: 'PATCH',
@@ -430,7 +439,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
   deleteExpense: async (id) => {
     const token = authToken();
     const userId = get().activeUserId;
-    if (!token || !userId) throw new Error('Not logged in');
+    if (!token || !userId) throw new Error('Please sign in again to continue.');
 
     await apiRequest(`/api/expenses/${id}`, { method: 'DELETE', token });
     const expenses = get().expenses.filter(e => e.id !== id);

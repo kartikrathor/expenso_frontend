@@ -11,7 +11,6 @@ import {
   Keyboard,
   Platform,
   ScrollView,
-  Alert,
   ActionSheetIOS,
   Share,
   ToastAndroid,
@@ -24,8 +23,13 @@ import { Spacing, Typography, Radius } from '../constants/theme';
 import { getTabBarBottomInset } from '../constants/layout';
 import { useTheme } from '../hooks/useTheme';
 import { useAuthStore } from '../store/authStore';
-import { apiRequest } from '../services/api';
+import { useProStore } from '../store/proStore';
+import { apiRequest, ApiError } from '../services/api';
 import { Expense } from '../types/expense';
+import { AppAlertModal, AppAlertContent } from './AppAlertModal';
+import { ChatHistorySkeleton } from './Skeleton';
+import { SpiderWebBackground } from './SpiderWebBackground';
+import { userFacingError } from '../utils/userFacingError';
 import {
   detectChatLang,
   localizeChips,
@@ -144,6 +148,8 @@ export function AskExpensoChat({
   const styles = useMemo(() => createStyles(colors), [colors]);
   const token = useAuthStore(s => s.token);
   const userId = useAuthStore(s => s.user?.id);
+  const isPro = useProStore(s => s.isPro);
+  const openPaywall = useProStore(s => s.openPaywall);
   const tabInset = getTabBarBottomInset(insets.bottom);
   const initialLang: ChatLang = 'en';
   const boot = useMemo(
@@ -291,11 +297,11 @@ export function AskExpensoChat({
       .catch(() => {});
   }, [token]);
 
-  // Above floating tab when closed; when open, clear tab space. Lift is applied via absolute `bottom`.
+  // Above floating tab when closed; when keyboard open, clear tab space.
   const composerSafePad = keyboardOpen
     ? Math.max(insets.bottom, Spacing.sm)
     : tabInset;
-  const [composerHeight, setComposerHeight] = useState(72);
+  const [alert, setAlert] = useState<AppAlertContent | null>(null);
 
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -332,10 +338,15 @@ export function AskExpensoChat({
         );
         return;
       }
-      Alert.alert(title, undefined, [
-        { text: 'Copy', onPress: () => copyMessage(text) },
-        { text: 'Cancel', style: 'cancel' },
-      ]);
+      setAlert({
+        icon: '📋',
+        title,
+        message: 'Copy this message to your clipboard.',
+        buttons: [
+          { label: 'Cancel', variant: 'secondary' },
+          { label: 'Copy', variant: 'primary', onPress: () => copyMessage(text) },
+        ],
+      });
     },
     [copyMessage],
   );
@@ -344,6 +355,12 @@ export function AskExpensoChat({
     async (raw: string, mode: 'keyboard' | 'chip' = 'keyboard') => {
       const text = raw.trim();
       if (!text || !token || busy) return;
+
+      // Always read latest entitlement (avoid stale closure / cached Pro)
+      if (!useProStore.getState().isPro) {
+        openPaywall('ask_ai');
+        return;
+      }
 
       const lang = detectChatLang(text);
       setChatLang(lang);
@@ -439,14 +456,25 @@ export function AskExpensoChat({
         ]);
         setChips(replyChips);
       } catch (err: any) {
+        const proBlocked =
+          err instanceof ApiError &&
+          (err.code === 'PRO_REQUIRED' || err.status === 403);
+        if (proBlocked) {
+          // Drop optimistic user bubble — free users must not keep an Ask thread going
+          setMessages(prev => prev.filter(m => m.id !== userMsg.id));
+          if (mode === 'keyboard') setInput(text);
+          openPaywall('ask_ai');
+          return;
+        }
         setMessages(prev => [
           ...prev,
           {
             id: `a_${Date.now()}`,
             role: 'assistant',
-            text:
-              err?.message ||
-              'Server se baat nahi ho payi. Internet check karke dobara try karo.',
+            text: userFacingError(
+              err,
+              'Couldn’t reach Ask Expenso right now. Check your internet and try again.',
+            ),
             chips: startChipsFor(lang, isJoint),
             createdAt: Date.now(),
             source: 'fallback',
@@ -457,13 +485,17 @@ export function AskExpensoChat({
         setBusy(false);
       }
     },
-    [token, busy, expenses, monthlyBudget, isJoint, lastIntent, chips],
+    [token, busy, expenses, monthlyBudget, isJoint, lastIntent, chips, openPaywall],
   );
 
   const requestPrecise = useCallback(
     async (assistantMsg: ChatBubble) => {
       if (!token || busy || preciseBusyId || assistantMsg.role !== 'assistant') return;
       if (assistantMsg.id === 'welcome') return;
+      if (!useProStore.getState().isPro) {
+        openPaywall('ask_ai');
+        return;
+      }
 
       const idx = messagesRef.current.findIndex(m => m.id === assistantMsg.id);
       const priorUser =
@@ -549,6 +581,13 @@ export function AskExpensoChat({
         );
         setChips(replyChips);
       } catch (err: any) {
+        const proBlocked =
+          err instanceof ApiError &&
+          (err.code === 'PRO_REQUIRED' || err.status === 403);
+        if (proBlocked) {
+          openPaywall('ask_ai');
+          return;
+        }
         setMessages(prev =>
           prev.map(m =>
             m.id === assistantMsg.id
@@ -557,8 +596,10 @@ export function AskExpensoChat({
                   text:
                     (m.text || '') +
                     '\n\n' +
-                    (err?.message ||
-                      'Precise answer nahi mil paya. Thodi der baad try karo.'),
+                    userFacingError(
+                      err,
+                      'Couldn’t get a more detailed answer. Please try again in a bit.',
+                    ),
                 }
               : m,
           ),
@@ -567,7 +608,7 @@ export function AskExpensoChat({
         setPreciseBusyId(null);
       }
     },
-    [token, busy, preciseBusyId, expenses, monthlyBudget, isJoint],
+    [token, busy, preciseBusyId, expenses, monthlyBudget, isJoint, openPaywall],
   );
 
   const rootProps =
@@ -587,98 +628,115 @@ export function AskExpensoChat({
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>Ask Expenso</Text>
             <Text style={styles.subtitle}>
-              {isJoint ? 'Joint data · smart assistant' : 'Your data · smart assistant'}
+              {isPro
+                ? isJoint
+                  ? 'Joint data · smart assistant'
+                  : 'Your data · smart assistant'
+                : 'Pro · 500 tokens / day'}
             </Text>
           </View>
-          {tokensLeft != null && (
+          {isPro && tokensLeft != null ? (
             <View style={styles.tokenPill}>
               <Text style={styles.tokenText}>
                 {tokensLeft}/{tokensLimit}
               </Text>
             </View>
-          )}
+          ) : !isPro ? (
+            <Pressable style={styles.lockPill} onPress={() => openPaywall('ask_ai')}>
+              <Text style={styles.lockPillText}>🔒 Pro</Text>
+            </Pressable>
+          ) : null}
         </View>
 
-        {!historyReady ? (
-          <View style={[styles.listFlex, styles.listLoading, { marginBottom: composerHeight + keyboardLift }]}>
-            <ActivityIndicator color={colors.primaryLight} />
+        {/* Webs only behind the message list — never over header / composer */}
+        <View style={styles.listShell}>
+          <View style={styles.listWebs} pointerEvents="none" collapsable={false}>
+            <SpiderWebBackground opacity={0.22} />
           </View>
-        ) : (
-          <FlatList
-            ref={listRef}
-            style={[styles.listFlex, { marginBottom: composerHeight + keyboardLift }]}
-            data={listData}
-            inverted
-            keyExtractor={item => item.id}
-            contentContainerStyle={[styles.list, { flexGrow: 1 }]}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="interactive"
-            renderItem={({ item }) => {
-              const showPrecise =
-                item.role === 'assistant' &&
-                item.id !== 'welcome' &&
-                item.canPrecise !== false &&
-                item.source !== 'precise';
-              const refining = preciseBusyId === item.id;
-              return (
-                <View
-                  style={[
-                    styles.bubbleWrap,
-                    item.role === 'user' ? styles.bubbleWrapUser : styles.bubbleWrapAssistant,
-                  ]}
-                >
-                  <Pressable
-                    onLongPress={() => onBubbleLongPress(item)}
-                    delayLongPress={350}
-                    accessibilityHint="Long press to copy"
-                    style={[
-                      styles.bubble,
-                      item.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant,
-                    ]}
-                  >
-                    <Text
+
+          {!historyReady ? (
+            <View style={styles.listFlex}>
+              <ChatHistorySkeleton />
+            </View>
+          ) : (
+            <View style={styles.listFront} collapsable={false}>
+              <FlatList
+                ref={listRef}
+                style={styles.listFlex}
+                data={listData}
+                inverted
+                keyExtractor={item => item.id}
+                contentContainerStyle={styles.list}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
+                removeClippedSubviews={false}
+                renderItem={({ item }) => {
+                  const showPrecise =
+                    isPro &&
+                    item.role === 'assistant' &&
+                    item.id !== 'welcome' &&
+                    item.canPrecise !== false &&
+                    item.source !== 'precise';
+                  const refining = preciseBusyId === item.id;
+                  return (
+                    <View
                       style={[
-                        styles.bubbleText,
-                        item.role === 'user'
-                          ? styles.bubbleTextUser
-                          : styles.bubbleTextAssistant,
+                        styles.bubbleWrap,
+                        item.role === 'user' ? styles.bubbleWrapUser : styles.bubbleWrapAssistant,
                       ]}
-                      selectable={false}
                     >
-                      {item.text}
-                    </Text>
-                  </Pressable>
-                  {showPrecise && (
-                    <Pressable
-                      style={styles.preciseBtn}
-                      onPress={() => requestPrecise(item)}
-                      disabled={!!preciseBusyId || busy || refining}
-                      hitSlop={8}
-                    >
-                      {refining ? (
-                        <ActivityIndicator size="small" color={colors.primaryLight} />
-                      ) : (
-                        <Text style={styles.preciseText}>✦ Need a more accurate answer</Text>
+                      <Pressable
+                        onLongPress={() => onBubbleLongPress(item)}
+                        delayLongPress={350}
+                        accessibilityHint="Long press to copy"
+                        style={[
+                          styles.bubble,
+                          item.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.bubbleText,
+                            item.role === 'user'
+                              ? styles.bubbleTextUser
+                              : styles.bubbleTextAssistant,
+                          ]}
+                          selectable={false}
+                        >
+                          {item.text}
+                        </Text>
+                      </Pressable>
+                      {showPrecise && (
+                        <Pressable
+                          style={styles.preciseBtn}
+                          onPress={() => requestPrecise(item)}
+                          disabled={!!preciseBusyId || busy || refining}
+                          hitSlop={8}
+                        >
+                          {refining ? (
+                            <ActivityIndicator size="small" color={colors.primaryLight} />
+                          ) : (
+                            <Text style={styles.preciseText}>✦ Need a more accurate answer</Text>
+                          )}
+                        </Pressable>
                       )}
-                    </Pressable>
-                  )}
-                </View>
-              );
-            }}
-          />
-        )}
+                    </View>
+                  );
+                }}
+              />
+            </View>
+          )}
+        </View>
 
         <View
           style={[
             styles.inputBar,
-            styles.inputBarAbsolute,
             {
-              bottom: keyboardLift,
               paddingBottom: composerSafePad,
+              marginBottom: keyboardLift,
               backgroundColor: colors.background,
             },
           ]}
-          onLayout={e => setComposerHeight(e.nativeEvent.layout.height)}
         >
           <ScrollView
             horizontal
@@ -690,47 +748,83 @@ export function AskExpensoChat({
             {(messages[messages.length - 1]?.chips || chips).map((c, i) => (
               <Pressable
                 key={`${i}-${c}`}
-                style={[styles.chip, busy && styles.chipDisabled]}
-                onPress={() => send(c, 'chip')}
+                style={[styles.chip, (busy || !isPro) && styles.chipDisabled]}
+                onPress={() => {
+                  if (!useProStore.getState().isPro) {
+                    openPaywall('ask_ai');
+                    return;
+                  }
+                  send(c, 'chip');
+                }}
                 disabled={busy}
               >
                 <Text style={styles.chipText} numberOfLines={1}>
-                  {c}
+                  {!isPro ? `🔒 ${c}` : c}
                 </Text>
               </Pressable>
             ))}
           </ScrollView>
           <View style={styles.inputRow}>
-            <TextInput
-              style={styles.input}
-              value={input}
-              onChangeText={setInput}
-              placeholder={
-                chatLang === 'hi' ? 'e.g. is month kitna kharch?' : 'e.g. how much this month?'
-              }
-              placeholderTextColor={colors.textMuted}
-              editable={!busy}
-              onFocus={() => {
-                setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 150);
-              }}
-              onSubmitEditing={() => send(input, 'keyboard')}
-              returnKeyType="send"
-              blurOnSubmit={false}
-            />
             <Pressable
-              style={[styles.sendBtn, (!input.trim() || busy) && styles.sendDisabled]}
-              onPress={() => send(input, 'keyboard')}
-              disabled={!input.trim() || busy}
+              style={{ flex: 1 }}
+              onPress={() => {
+                if (!useProStore.getState().isPro) openPaywall('ask_ai');
+              }}
+              disabled={isPro}
+            >
+              <TextInput
+                style={[styles.input, !isPro && styles.inputLocked]}
+                value={input}
+                onChangeText={setInput}
+                placeholder={
+                  !isPro
+                    ? 'Pro required for Ask AI'
+                    : chatLang === 'hi'
+                      ? 'e.g. is month kitna kharch?'
+                      : 'e.g. how much this month?'
+                }
+                placeholderTextColor={colors.textMuted}
+                editable={!busy && isPro}
+                pointerEvents={isPro ? 'auto' : 'none'}
+                onFocus={() => {
+                  setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 150);
+                }}
+                onSubmitEditing={() => send(input, 'keyboard')}
+                returnKeyType="send"
+                blurOnSubmit={false}
+              />
+            </Pressable>
+            <Pressable
+              style={[
+                styles.sendBtn,
+                ((isPro && !input.trim()) || busy) && styles.sendDisabled,
+              ]}
+              onPress={() => {
+                if (!useProStore.getState().isPro) {
+                  openPaywall('ask_ai');
+                  return;
+                }
+                send(input, 'keyboard');
+              }}
+              disabled={busy || (isPro && !input.trim())}
             >
               {busy ? (
                 <ActivityIndicator color="#FFF" size="small" />
               ) : (
-                <Text style={styles.sendText}>Ask</Text>
+                <Text style={styles.sendText}>{isPro ? 'Ask' : 'Pro'}</Text>
               )}
             </Pressable>
           </View>
         </View>
       </KeyboardAvoidingView>
+      <AppAlertModal
+        visible={!!alert}
+        title={alert?.title || ''}
+        message={alert?.message || ''}
+        icon={alert?.icon}
+        buttons={alert?.buttons}
+        onClose={() => setAlert(null)}
+      />
     </View>
   );
 }
@@ -738,8 +832,19 @@ export function AskExpensoChat({
 function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
     root: { flex: 1 },
-    listFlex: { flex: 1 },
-    listLoading: { alignItems: 'center', justifyContent: 'center' },
+    listShell: {
+      flex: 1,
+      position: 'relative',
+    },
+    listWebs: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    listFront: {
+      flex: 1,
+    },
+    listFlex: {
+      flex: 1,
+    },
     header: {
       flexDirection: 'row',
       justifyContent: 'space-between',
@@ -748,6 +853,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       paddingVertical: Spacing.md,
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
+      backgroundColor: colors.background,
     },
     title: { ...Typography.h2, color: colors.text, fontSize: 22 },
     subtitle: { ...Typography.caption, color: colors.textSecondary, marginTop: 2 },
@@ -761,6 +867,16 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       marginLeft: Spacing.sm,
     },
     tokenText: { ...Typography.small, color: colors.primaryLight, fontWeight: '700' },
+    lockPill: {
+      paddingHorizontal: Spacing.sm + 2,
+      paddingVertical: Spacing.xs + 2,
+      borderRadius: Radius.full,
+      backgroundColor: colors.warning + '22',
+      borderWidth: 1,
+      borderColor: colors.warning + '55',
+      marginLeft: Spacing.sm,
+    },
+    lockPillText: { ...Typography.small, color: colors.warning, fontWeight: '800' },
     list: { padding: Spacing.lg, paddingBottom: Spacing.md, flexGrow: 1 },
     bubbleWrap: { marginBottom: Spacing.sm, maxWidth: '92%' },
     bubbleWrapUser: { alignSelf: 'flex-end', alignItems: 'flex-end' },
@@ -832,12 +948,6 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderTopWidth: 1,
       borderTopColor: colors.border,
     },
-    inputBarAbsolute: {
-      position: 'absolute',
-      left: 0,
-      right: 0,
-      zIndex: 2,
-    },
     inputRow: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -856,6 +966,9 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       paddingVertical: Platform.OS === 'ios' ? Spacing.md : Spacing.sm,
       color: colors.text,
       fontSize: 16,
+    },
+    inputLocked: {
+      opacity: 0.7,
     },
     sendBtn: {
       backgroundColor: colors.primary,

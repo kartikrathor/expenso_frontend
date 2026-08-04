@@ -3,6 +3,7 @@ import { useActivityStore } from '../store/activityStore';
 import { useJointStore } from '../store/jointStore';
 import { useCategoryStore } from '../store/categoryStore';
 import { useMerchantStore } from '../store/merchantStore';
+import { useNotificationInboxStore } from '../store/notificationInboxStore';
 import { CATEGORIES } from '../constants/categories';
 import { MERCHANTS, setRuntimeMerchants } from '../constants/merchants';
 import { preloadAskChatHistory } from './askChatHistory';
@@ -12,9 +13,12 @@ import { preloadAskChatHistory } from './askChatHistory';
  * or switching accounts so the previous user's expenses never linger.
  */
 export async function clearSessionStores() {
-  await useExpenseStore.getState().loadForUser(null);
-  await useActivityStore.getState().loadForUser(null);
-  await useJointStore.getState().resetSession();
+  await Promise.all([
+    useExpenseStore.getState().loadForUser(null),
+    useActivityStore.getState().loadForUser(null),
+    useJointStore.getState().resetSession(),
+    useNotificationInboxStore.getState().loadForUser(null),
+  ]);
   useCategoryStore.setState({ all: CATEGORIES, custom: [], isLoaded: false });
   setRuntimeMerchants(MERCHANTS);
   useMerchantStore.setState({ all: MERCHANTS, isLoaded: false });
@@ -22,17 +26,21 @@ export async function clearSessionStores() {
 
 /**
  * Bind local stores to the signed-in user and refresh joint from server.
+ * Expenses load first (UI needs them); the rest run in parallel.
  */
 export async function bindSessionToUser(userId: string | null) {
   if (!userId) {
     await clearSessionStores();
     return;
   }
+  // Critical path: personal expenses cache → first paint
   await useExpenseStore.getState().loadForUser(userId);
-  await useActivityStore.getState().loadForUser(userId);
-  await useJointStore.getState().loadJoint();
-  await useCategoryStore.getState().loadCategories();
-  await useMerchantStore.getState().loadMerchants();
-  // Warm Ask chat so first open doesn't flash/re-scroll
+  // Parallel: everything else
+  await Promise.all([
+    useActivityStore.getState().loadForUser(userId),
+    useJointStore.getState().loadJoint(),
+    useCategoryStore.getState().loadCategories(),
+    useMerchantStore.getState().loadMerchants(),
+  ]);
   void preloadAskChatHistory(userId);
 }

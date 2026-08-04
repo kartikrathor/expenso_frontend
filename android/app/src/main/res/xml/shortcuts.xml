@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="add_expense"
+        android:shortcutLongLabel="@string/widget_add_expense"
+        android:shortcutShortLabel="@string/widget_add_expense_short">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="expenso://quickadd"
+            android:targetClass="com.kriovent.expenso.QuickAddExpenseActivity"
+            android:targetPackage="com.kriovent.expenso" />
+    </shortcut>
+</shortcuts>

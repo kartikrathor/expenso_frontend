@@ -6,7 +6,8 @@ import {
   Pressable,
   KeyboardAvoidingView,
   Platform,
-  Alert,
+  AppState,
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import LinearGradient from 'react-native-linear-gradient';
@@ -15,6 +16,7 @@ import { useTheme } from '../hooks/useTheme';
 import { useAppLockStore } from '../store/appLockStore';
 import { useAuthStore } from '../store/authStore';
 import { getBiometryAvailability, promptBiometricUnlock } from '../utils/biometrics';
+import { AppAlertModal, AppAlertContent } from '../components/AppAlertModal';
 
 export function AppLockScreen() {
   const insets = useSafeAreaInsets();
@@ -25,7 +27,6 @@ export function AppLockScreen() {
   const logout = useAuthStore(s => s.logout);
   const unlock = useAppLockStore(s => s.unlock);
   const unlockWithBiometric = useAppLockStore(s => s.unlockWithBiometric);
-  const beginBiometricPrompt = useAppLockStore(s => s.beginBiometricPrompt);
   const biometricEnabled = useAppLockStore(s => s.biometricEnabled);
   const clearForUser = useAppLockStore(s => s.clearForUser);
   const [pin, setPin] = useState('');
@@ -33,35 +34,63 @@ export function AppLockScreen() {
   const [busy, setBusy] = useState(false);
   const [bioLabel, setBioLabel] = useState('Biometric');
   const [bioReady, setBioReady] = useState(false);
-  const promptedRef = useRef(false);
+  const promptingRef = useRef(false);
+  const autoTriedRef = useRef(false);
+  const [alert, setAlert] = useState<AppAlertContent | null>(null);
 
   const tryBiometric = useCallback(async () => {
-    if (!biometricEnabled) return;
+    if (!biometricEnabled || promptingRef.current) return;
+    promptingRef.current = true;
     setBusy(true);
     setError('');
     try {
       const info = await getBiometryAvailability();
       if (!info.available) {
         setBioReady(false);
+        setError(
+          info.error ||
+            'Biometric not available. Use PIN, or add fingerprint / Face ID in phone Settings.',
+        );
         return;
       }
       setBioLabel(info.label);
       setBioReady(true);
-      beginBiometricPrompt();
-      const ok = await promptBiometricUnlock(info.label);
-      if (ok) unlockWithBiometric();
+      const result = await promptBiometricUnlock(info.label);
+      if (result.success) {
+        unlockWithBiometric();
+        return;
+      }
+      if (result.error) {
+        setError(result.error);
+      }
+      // Cancelled → stay on PIN screen quietly
     } finally {
+      promptingRef.current = false;
       setBusy(false);
     }
-  }, [biometricEnabled, beginBiometricPrompt, unlockWithBiometric]);
+  }, [biometricEnabled, unlockWithBiometric]);
 
+  // Auto-prompt once when lock screen appears (wait until app is active).
   useEffect(() => {
-    if (!biometricEnabled || promptedRef.current) return;
-    promptedRef.current = true;
-    const t = setTimeout(() => {
+    if (!biometricEnabled || autoTriedRef.current) return;
+    autoTriedRef.current = true;
+
+    const run = () => {
       void tryBiometric();
-    }, 350);
-    return () => clearTimeout(t);
+    };
+
+    if (AppState.currentState === 'active') {
+      const t = setTimeout(run, 400);
+      return () => clearTimeout(t);
+    }
+
+    const sub = AppState.addEventListener('change', state => {
+      if (state === 'active') {
+        sub.remove();
+        setTimeout(run, 300);
+      }
+    });
+    return () => sub.remove();
   }, [biometricEnabled, tryBiometric]);
 
   const submit = async () => {
@@ -70,20 +99,22 @@ export function AppLockScreen() {
     const ok = await unlock(pin);
     setBusy(false);
     if (!ok) {
-      setError('Wrong PIN');
+      setError('Wrong PIN. Please try again.');
       setPin('');
     }
   };
 
   const forgotPin = useCallback(() => {
-    Alert.alert(
-      'Forgot PIN?',
-      'App lock PIN will be cleared and you will be signed out. Sign in again with your email & password, then set a new PIN in Settings.',
-      [
-        { text: 'Cancel', style: 'cancel' },
+    setAlert({
+      icon: '🔑',
+      title: 'Forgot PIN?',
+      message:
+        'App lock PIN will be cleared and you will be signed out. Sign in again with your email & password, then set a new PIN in Settings.',
+      buttons: [
+        { label: 'Cancel', variant: 'secondary' },
         {
-          text: 'Sign out',
-          style: 'destructive',
+          label: 'Sign out',
+          variant: 'danger',
           onPress: async () => {
             setBusy(true);
             setError('');
@@ -91,16 +122,17 @@ export function AppLockScreen() {
               if (userId) await clearForUser(userId);
               await logout();
             } catch {
-              setError('Could not sign out. Try again.');
+              setError('Couldn’t sign out. Please try again.');
               setBusy(false);
             }
           },
         },
       ],
-    );
+    });
   }, [userId, clearForUser, logout]);
 
   return (
+    <View style={{ flex: 1 }}>
     <KeyboardAvoidingView
       style={[styles.root, { paddingTop: insets.top + 40, backgroundColor: colors.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -167,6 +199,15 @@ export function AppLockScreen() {
       </Pressable>
       <Text style={styles.forgotHint}>Clears lock & signs you out so you can log in again</Text>
     </KeyboardAvoidingView>
+    <AppAlertModal
+      visible={!!alert}
+      title={alert?.title || ''}
+      message={alert?.message || ''}
+      icon={alert?.icon}
+      buttons={alert?.buttons}
+      onClose={() => setAlert(null)}
+    />
+    </View>
   );
 }
 

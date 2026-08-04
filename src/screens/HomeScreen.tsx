@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,15 +12,16 @@ import {
   RefreshControl,
   ListRenderItem,
 } from 'react-native';
-import Animated, { FadeInDown, useAnimatedStyle, withSpring, useSharedValue } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, withSpring, useSharedValue } from 'react-native-reanimated';
 import { WaterGradient } from '../components/WaterGradient';
 import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useIsFocused } from '@react-navigation/native';
 import { useExpenseStore } from '../store/expenseStore';
 import { useJointStore } from '../store/jointStore';
 import { useActivityStore } from '../store/activityStore';
 import { useHouseholdExpenses } from '../hooks/useHouseholdExpenses';
-import { ExpenseCard } from '../components/ExpenseCard';
+import { ExpenseCard, EXPENSE_CARD_ROW_HEIGHT } from '../components/ExpenseCard';
 import { EmptyState } from '../components/EmptyState';
 import { AddExpenseModal, ExpenseSaveData } from '../components/AddExpenseModal';
 import { HoldMicFab } from '../components/HoldMicFab';
@@ -28,13 +29,19 @@ import { SuccessToast } from '../components/SuccessToast';
 import { BudgetProgress } from '../components/BudgetProgress';
 import { QuickAddBar } from '../components/QuickAddBar';
 import { ThemeToggle } from '../components/ThemeToggle';
+import { NotificationsModal } from '../components/NotificationsModal';
+import { WebFluidDripBurst } from '../components/WebFluidDripBurst';
+import { useThemeStore } from '../store/themeStore';
+import { useNotificationInboxStore } from '../store/notificationInboxStore';
 import { AddExpenseHeroIcon } from '../components/icons/AddExpenseHeroIcon';
 import { SwipeScrollLockGate } from '../hooks/useSwipeScrollLock';
 import { formatCurrency } from '../utils/expenseParser';
+import { syncExpenseWidget, startWidgetRefreshWatcher } from '../utils/expenseWidget';
+import { useAuthStore } from '../store/authStore';
 import { Spacing, Typography, Radius } from '../constants/theme';
 import { getTabBarBottomInset } from '../constants/layout';
 import { useTheme } from '../hooks/useTheme';
-import { useAuthStore } from '../store/authStore';
+import { useAddExpenseNavStore } from '../store/addExpenseNavStore';
 import { useDeleteExpense } from '../hooks/useDeleteExpense';
 import { useEditExpense } from '../hooks/useEditExpense';
 import { Expense, TimeFilter, MerchantId } from '../types/expense';
@@ -55,7 +62,8 @@ function firstName(full?: string | null) {
 
 export function HomeScreen() {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const isFocused = useIsFocused();
+  const { colors, gradientPoints } = useTheme();
   const bottomPad = getTabBarBottomInset(insets.bottom);
   const userName = useAuthStore(s => s.user?.name);
   const greetName = firstName(userName);
@@ -65,7 +73,15 @@ export function HomeScreen() {
   const [showBudget, setShowBudget] = useState(false);
   const [budgetInput, setBudgetInput] = useState('');
   const [toast, setToast] = useState<{ amount: number; merchant: MerchantId; label: string } | null>(null);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [dripBurst, setDripBurst] = useState(0);
   const fabScale = useSharedValue(1);
+  const packId = useThemeStore(s => s.packId);
+  const unreadNotifs = useNotificationInboxStore(
+    s => s.items.reduce((n, item) => (item.read ? n : n + 1), 0),
+  );
+  const openAddFromWidget = useAddExpenseNavStore(s => s.openAdd);
+  const clearOpenAdd = useAddExpenseNavStore(s => s.clearOpenAdd);
 
   const { isJoint, joint, expenses: householdExpenses, getFiltered, getTotal, getTodayTotal, monthlyBudget, setMonthlyBudget, onRefresh, refreshing, pendingCount, isSyncing } =
     useHouseholdExpenses();
@@ -80,7 +96,50 @@ export function HomeScreen() {
   const monthTotal = useMemo(() => getTotal('month'), [getTotal, householdExpenses]);
   const todayTotal = useMemo(() => getTodayTotal(), [getTodayTotal, householdExpenses]);
 
+  // Widget / shortcut requested Add Expense
+  useEffect(() => {
+    if (!openAddFromWidget) return;
+    setShowAdd(true);
+    clearOpenAdd();
+  }, [openAddFromWidget, clearOpenAdd]);
+
+  // Keep Android home-screen widget in sync (debounced — avoid bridge spam)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const token = useAuthStore.getState().token;
+      const userId = useAuthStore.getState().user?.id ?? null;
+      syncExpenseWidget({
+        expenses: householdExpenses,
+        todayTotal,
+        accountLabel: isJoint ? joint?.name || 'Joint' : 'Personal',
+        token,
+        userId,
+        groupId: isJoint ? joint?.id ?? null : null,
+      });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [householdExpenses, todayTotal, isJoint, joint?.id, joint?.name]);
+
+  // If Quick Add saved while app was closed, pull fresh lists
+  useEffect(() => {
+    return startWidgetRefreshWatcher(() => {
+      void onRefresh();
+    });
+  }, [onRefresh]);
+
   const recentList = useMemo(() => {
+    // Most stores already keep newest-first; only sort if needed
+    if (householdExpenses.length <= 1) return householdExpenses.slice(0, 40);
+    let needsSort = false;
+    for (let i = 1; i < Math.min(householdExpenses.length, 8); i++) {
+      const a = Date.parse(householdExpenses[i - 1].date) || 0;
+      const b = Date.parse(householdExpenses[i].date) || 0;
+      if (a < b) {
+        needsSort = true;
+        break;
+      }
+    }
+    if (!needsSort) return householdExpenses.slice(0, 40);
     return [...householdExpenses]
       .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
       .slice(0, 40);
@@ -134,15 +193,32 @@ export function HomeScreen() {
 
   const ListHeader = useMemo(() => (
     <View>
-      <Animated.View entering={FadeInDown.duration(220)} style={styles.header}>
+      <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.greeting}>
             {greetName ? `Hello ${greetName} 👋` : 'Hello 👋'}
           </Text>
           <Text style={styles.date}>{format(new Date(), 'EEEE, d MMMM')}</Text>
         </View>
-        <ThemeToggle />
-      </Animated.View>
+        <View style={styles.headerRight}>
+          <Pressable
+            style={styles.bellBtn}
+            onPress={() => setNotifOpen(true)}
+            hitSlop={8}
+            accessibilityLabel="Notifications"
+          >
+            <Text style={styles.bellIcon}>🔔</Text>
+            {unreadNotifs > 0 ? (
+              <View style={styles.bellBadge}>
+                <Text style={styles.bellBadgeText}>
+                  {unreadNotifs > 9 ? '9+' : String(unreadNotifs)}
+                </Text>
+              </View>
+            ) : null}
+          </Pressable>
+          <ThemeToggle />
+        </View>
+      </View>
 
       {isJoint && (
         <View style={styles.jointBanner}>
@@ -160,8 +236,8 @@ export function HomeScreen() {
         </View>
       )}
 
-      <Animated.View entering={FadeInDown.delay(60).duration(220)}>
-        <WaterGradient fill={waterFill} style={styles.heroCard}>
+      <View>
+        <WaterGradient fill={waterFill} active={isFocused} style={styles.heroCard}>
           <Text style={styles.heroLabel}>
             {filterLabel}
             {isJoint ? ' · Joint' : ''}
@@ -179,7 +255,7 @@ export function HomeScreen() {
             </View>
           </View>
         </WaterGradient>
-      </Animated.View>
+      </View>
 
       <BudgetProgress
         spent={monthTotal}
@@ -217,6 +293,7 @@ export function HomeScreen() {
     joint,
     pendingCount,
     isSyncing,
+    unreadNotifs,
     waterFill,
     filterLabel,
     total,
@@ -226,6 +303,7 @@ export function HomeScreen() {
     monthlyBudget,
     openBudget,
     filter,
+    isFocused,
   ]);
 
   const renderItem = useCallback<ListRenderItem<Expense>>(
@@ -284,13 +362,18 @@ export function HomeScreen() {
             data={recentList}
             keyExtractor={keyExtractor}
             renderItem={renderItem}
+            getItemLayout={(_, index) => ({
+              length: EXPENSE_CARD_ROW_HEIGHT,
+              offset: EXPENSE_CARD_ROW_HEIGHT * index,
+              index,
+            })}
             ListHeaderComponent={ListHeader}
             ListEmptyComponent={ListEmpty}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad + 72 }]}
             initialNumToRender={8}
             maxToRenderPerBatch={6}
-            windowSize={7}
+            windowSize={5}
             updateCellsBatchingPeriod={50}
             removeClippedSubviews={Platform.OS === 'android'}
             refreshControl={
@@ -307,20 +390,45 @@ export function HomeScreen() {
 
       <View style={[styles.fabRow, { bottom: bottomPad - 8 }]}>
         <HoldMicFab onSave={handleSave} />
-        <Animated.View style={fabStyle}>
-          <Pressable
-            onPress={() => setShowAdd(true)}
-            onPressIn={() => { fabScale.value = withSpring(0.9); }}
-            onPressOut={() => { fabScale.value = withSpring(1); }}
-          >
-            <LinearGradient colors={[colors.gradientStart, colors.gradientEnd]} style={styles.fab}>
-              <Text style={styles.fabIcon}>+</Text>
-            </LinearGradient>
-          </Pressable>
-        </Animated.View>
+        <View style={styles.fabWrap}>
+          {packId === 'red_web_spider' ? (
+            <View style={styles.dripLayer} pointerEvents="none">
+              <WebFluidDripBurst trigger={dripBurst} />
+            </View>
+          ) : null}
+          <Animated.View style={[fabStyle, styles.fabFront]}>
+            <Pressable
+              onPress={() => {
+                if (packId === 'red_web_spider') {
+                  setDripBurst(n => n + 1);
+                  setTimeout(() => setShowAdd(true), 320);
+                } else {
+                  setShowAdd(true);
+                }
+              }}
+              onPressIn={() => {
+                fabScale.value = withSpring(0.9);
+              }}
+              onPressOut={() => {
+                fabScale.value = withSpring(1);
+              }}
+            >
+              <LinearGradient
+                colors={[colors.gradientStart, colors.gradientEnd]}
+                {...(gradientPoints
+                  ? { start: gradientPoints.start, end: gradientPoints.end }
+                  : {})}
+                style={styles.fab}
+              >
+                <Text style={styles.fabIcon}>+</Text>
+              </LinearGradient>
+            </Pressable>
+          </Animated.View>
+        </View>
       </View>
 
       <AddExpenseModal visible={showAdd} onClose={() => setShowAdd(false)} onSave={handleSave} />
+      <NotificationsModal visible={notifOpen} onClose={() => setNotifOpen(false)} />
       {deleteModal}
       {editModal}
 
@@ -371,6 +479,33 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     scroll: { padding: Spacing.lg, flexGrow: 1 },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: Spacing.md },
     headerLeft: { flex: 1 },
+    headerRight: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+    bellBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: 14,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    bellIcon: { fontSize: 18 },
+    bellBadge: {
+      position: 'absolute',
+      top: -4,
+      right: -4,
+      minWidth: 18,
+      height: 18,
+      borderRadius: 9,
+      paddingHorizontal: 4,
+      backgroundColor: colors.danger,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderWidth: 2,
+      borderColor: colors.background,
+    },
+    bellBadgeText: { color: '#fff', fontSize: 10, fontWeight: '800' },
     greeting: { ...Typography.h1, color: colors.text },
     date: { ...Typography.caption, color: colors.textSecondary, marginTop: 2 },
     jointBanner: {
@@ -436,6 +571,24 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       flexDirection: 'row',
       alignItems: 'center',
       gap: Spacing.sm,
+      zIndex: 20,
+    },
+    fabWrap: {
+      width: 58,
+      height: 58,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    dripLayer: {
+      position: 'absolute',
+      width: 140,
+      height: 170,
+      top: -56,
+      left: -41,
+      zIndex: 1,
+    },
+    fabFront: {
+      zIndex: 2,
     },
     fab: {
       width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center',

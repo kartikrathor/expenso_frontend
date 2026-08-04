@@ -17,8 +17,77 @@ const MERCHANT_ALIASES: Record<string, string> = {
   'zomato food': 'zomato', 'swiggy food': 'swiggy',
 };
 
+/** e.g. "12 + 20", "100*2", "50 - 10 + 5" */
+const MATH_EXPR_RE =
+  /(\d+(?:,\d{3})*(?:\.\d+)?(?:\s*[+\-*/×÷xX]\s*\d+(?:,\d{3})*(?:\.\d+)?)+)/;
+
+/** Safe evaluator for + - * / (no Function/eval). * / before + -. */
+function evaluateMathExpression(expr: string): number | null {
+  const normalized = expr
+    .replace(/,/g, '')
+    .replace(/[×xX]/g, '*')
+    .replace(/÷/g, '/')
+    .replace(/\s+/g, '');
+
+  if (!/^[\d.+\-*/]+$/.test(normalized)) return null;
+
+  const tokens = normalized.match(/\d+(?:\.\d+)?|[+\-*/]/g);
+  if (!tokens || tokens.length < 3) return null;
+
+  const values: number[] = [];
+  const ops: string[] = [];
+
+  for (const token of tokens) {
+    if (token === '+' || token === '-' || token === '*' || token === '/') {
+      ops.push(token);
+    } else {
+      const n = parseFloat(token);
+      if (isNaN(n)) return null;
+      values.push(n);
+    }
+  }
+
+  if (values.length !== ops.length + 1) return null;
+
+  // Pass 1: * and /
+  let i = 0;
+  while (i < ops.length) {
+    if (ops[i] === '*' || ops[i] === '/') {
+      const a = values[i];
+      const b = values[i + 1];
+      if (ops[i] === '/' && b === 0) return null;
+      const result = ops[i] === '*' ? a * b : a / b;
+      values.splice(i, 2, result);
+      ops.splice(i, 1);
+    } else {
+      i += 1;
+    }
+  }
+
+  // Pass 2: + and -
+  let result = values[0];
+  for (let j = 0; j < ops.length; j++) {
+    if (ops[j] === '+') result += values[j + 1];
+    else result -= values[j + 1];
+  }
+
+  if (!isFinite(result) || result <= 0) return null;
+  // Keep currency-friendly precision
+  return Math.round(result * 100) / 100;
+}
+
+function extractMathAmount(text: string): number | null {
+  const match = text.match(MATH_EXPR_RE);
+  if (!match?.[1]) return null;
+  return evaluateMathExpression(match[1]);
+}
+
 function extractAmount(text: string): number | null {
   const normalized = text.toLowerCase().trim();
+
+  // Prefer calculated expressions: "Blinkit 12 + 20" → 32
+  const mathAmount = extractMathAmount(normalized);
+  if (mathAmount != null) return mathAmount;
 
   const digitPatterns = [
     /(?:rs\.?|₹|rupees?|rupaye?|rupya|inr|रुपय[eे]?|रु\.?)\s*(\d+(?:,\d{3})*(?:\.\d+)?)/i,
@@ -97,9 +166,47 @@ const CATEGORY_KEYWORDS: { keywords: string[]; category: CategoryId }[] = [
   },
   {
     keywords: [
+      'rent', 'kiraya', 'house rent', 'pg rent', 'hostel rent', 'flat rent', 'room rent',
+    ],
+    category: 'rent',
+  },
+  {
+    keywords: [
+      'tax', 'taxes', 'gst', 'tds', 'income tax', 'property tax', 'advance tax',
+    ],
+    category: 'taxes',
+  },
+  {
+    keywords: [
+      'gift', 'gifts', 'present', 'birthday gift', 'anniversary gift', 'wedding gift',
+    ],
+    category: 'gifts',
+  },
+  {
+    keywords: [
+      'donation', 'donate', 'charity', 'daan', 'ngo', 'temple donation', 'zakat',
+    ],
+    category: 'donation',
+  },
+  {
+    keywords: [
+      'insurance', 'premium', 'term plan', 'health insurance', 'life insurance',
+      'car insurance', 'bike insurance', 'policybazaar',
+    ],
+    category: 'insurance',
+  },
+  {
+    keywords: [
+      'salon', 'spa', 'haircut', 'grooming', 'cosmetics', 'skincare', 'parlour',
+      'makeup', 'facial', 'manicure', 'pedicure', 'barber',
+    ],
+    category: 'personal_care',
+  },
+  {
+    keywords: [
       'electricity', 'water bill', 'gas bill', 'gas', 'light', 'light bill', 'bijli',
       'current', 'current bill', 'lpg', 'cylinder', 'indane', 'internet', 'broadband', 'wifi',
-      'recharge', 'mobile', 'phone bill', 'dth', 'cable', 'emi', 'rent', 'insurance',
+      'recharge', 'mobile', 'phone bill', 'dth', 'cable', 'emi',
       'loan', 'bill', 'utility', 'airtel', 'jio', 'vi', 'vodafone', 'bsnl', 'maintenance',
     ],
     category: 'bills',
@@ -165,6 +272,7 @@ export function parseExpenseText(text: string): ParsedExpenseInput {
   let note = trimmed;
   if (amount) {
     note = trimmed
+      .replace(MATH_EXPR_RE, '')
       .replace(/\d+(?:,\d{3})*(?:\.\d+)?/g, '')
       .replace(/(?:rs\.?|₹|rupees?|rupaye?|रुपय[eे]?)/gi, '')
       .replace(/\s+/g, ' ')

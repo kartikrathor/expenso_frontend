@@ -25,6 +25,7 @@ import { useTheme } from '../hooks/useTheme';
 import { AddExpenseModal, ExpenseSaveData } from '../components/AddExpenseModal';
 import { ExpenseCard } from '../components/ExpenseCard';
 import { AddExpenseHeroIcon } from '../components/icons/AddExpenseHeroIcon';
+import { ExpensoMarkIcon } from '../components/icons/ExpensoMarkIcon';
 import { useExpenseStore } from '../store/expenseStore';
 import { Expense } from '../types/expense';
 
@@ -164,7 +165,7 @@ export function OnboardingScreen({ onDone }: OnboardingScreenProps) {
           end={{ x: 1, y: 1 }}
           style={styles.logoCircle}
         >
-          <Text style={styles.logoEmoji}>💸</Text>
+          <ExpensoMarkIcon size={44} color="#FFF" />
         </LinearGradient>
         <Text style={styles.logoLabel}>Expenso</Text>
       </View>
@@ -416,7 +417,6 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       shadowRadius: 20,
       elevation: 14,
     },
-    logoEmoji: { fontSize: 44 },
     logoLabel: {
       ...Typography.h2,
       color: colors.text,

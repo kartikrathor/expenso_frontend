@@ -12,6 +12,7 @@ import {
   merchantBreakdown,
   todaySpent,
   totalSpent,
+  TimeFilterOptions,
 } from '../utils/expenseAnalytics';
 
 /**
@@ -72,7 +73,8 @@ async function syncLocalIntoJointOnce() {
 }
 
 export function useHouseholdExpenses() {
-  const user = useAuthStore(s => s.user);
+  const userId = useAuthStore(s => s.user?.id);
+  const hasUser = !!userId;
   const joint = useJointStore(s => s.joint);
   const jointExpenses = useJointStore(s => s.expenses);
   const localExpenses = useExpenseStore(s => s.expenses);
@@ -87,15 +89,19 @@ export function useHouseholdExpenses() {
 
   const [refreshing, setRefreshing] = useState(false);
   const refreshLock = useRef(false);
+  const lastRefreshAt = useRef(0);
 
-  const isJoint = !!(user && joint);
+  const isJoint = !!(hasUser && joint);
   const expenses = isJoint ? jointExpenses : localExpenses;
   const monthlyBudget = isJoint
     ? (joint?.monthlyBudget ?? localBudget)
     : localBudget;
 
-  const refresh = useCallback(async () => {
-    if (!user || refreshLock.current) return;
+  const refresh = useCallback(async (opts?: { force?: boolean }) => {
+    if (!hasUser || refreshLock.current) return;
+    const now = Date.now();
+    // Soft focus refresh at most every 45s — pull-to-refresh always runs
+    if (!opts?.force && now - lastRefreshAt.current < 45_000) return;
     refreshLock.current = true;
     try {
       await loadJoint();
@@ -105,15 +111,16 @@ export function useHouseholdExpenses() {
       } else {
         await refreshPersonal();
       }
+      lastRefreshAt.current = Date.now();
     } finally {
       refreshLock.current = false;
     }
-  }, [user, loadJoint, flushOutbox, refreshPersonal]);
+  }, [hasUser, loadJoint, flushOutbox, refreshPersonal]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await refresh();
+      await refresh({ force: true });
     } finally {
       setRefreshing(false);
     }
@@ -121,8 +128,7 @@ export function useHouseholdExpenses() {
 
   useFocusEffect(
     useCallback(() => {
-      // Soft refresh — never blocks UI; queue + cache keep data safe
-      refresh();
+      void refresh();
     }, [refresh]),
   );
 
@@ -138,29 +144,29 @@ export function useHouseholdExpenses() {
   );
 
   const getFiltered = useCallback(
-    (filter: TimeFilter) => filterExpenses(expenses, filter),
+    (filter: TimeFilter | TimeFilterOptions) => filterExpenses(expenses, filter),
     [expenses],
   );
 
   const getTotal = useCallback(
-    (filter: TimeFilter) => totalSpent(expenses, filter),
+    (filter: TimeFilter | TimeFilterOptions) => totalSpent(expenses, filter),
     [expenses],
   );
 
   const getTodayTotal = useCallback(() => todaySpent(expenses), [expenses]);
 
   const getCategoryBreakdown = useCallback(
-    (filter: TimeFilter) => categoryBreakdown(expenses, filter),
+    (filter: TimeFilter | TimeFilterOptions) => categoryBreakdown(expenses, filter),
     [expenses],
   );
 
   const getMerchantBreakdown = useCallback(
-    (filter: TimeFilter) => merchantBreakdown(expenses, filter),
+    (filter: TimeFilter | TimeFilterOptions) => merchantBreakdown(expenses, filter),
     [expenses],
   );
 
   const getDailySpending = useCallback(
-    (filter: TimeFilter) => dailySpending(expenses, filter),
+    (filter: TimeFilter | TimeFilterOptions) => dailySpending(expenses, filter),
     [expenses],
   );
 

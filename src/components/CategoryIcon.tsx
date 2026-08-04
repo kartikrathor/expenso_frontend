@@ -4,6 +4,7 @@ import Svg, { Path, Circle, Rect } from 'react-native-svg';
 import { CategoryId } from '../types/expense';
 import { getCategoryConfig } from '../constants/categories';
 import { useCategoryStore } from '../store/categoryStore';
+import { RemoteIcon } from './RemoteIcon';
 
 type Props = {
   categoryId: CategoryId;
@@ -126,6 +127,131 @@ function HealthGlyph({ color, size }: { color: string; size: number }) {
   );
 }
 
+function RentGlyph({ color, size }: { color: string; size: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M4 11.5L12 5l8 6.5"
+        stroke={color}
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M6.5 10.8V19h11V10.8"
+        stroke={color}
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <Path d="M10 19v-5h4v5" stroke={color} strokeWidth="1.6" strokeLinejoin="round" />
+    </Svg>
+  );
+}
+
+function TaxesGlyph({ color, size }: { color: string; size: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M7 3.5h7.2L19 8.3V19a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5z"
+        stroke={color}
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+      <Path d="M14 3.8V8h4.2" stroke={color} strokeWidth="1.6" strokeLinejoin="round" />
+      <Path
+        d="M9.2 13.2l5.6 5.2M14.8 13.2l-5.6 5.2"
+        stroke={color}
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <Circle cx="9.6" cy="11.2" r="1.1" fill={color} />
+      <Circle cx="14.4" cy="18.4" r="1.1" fill={color} />
+    </Svg>
+  );
+}
+
+function GiftsGlyph({ color, size }: { color: string; size: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Rect x="4.5" y="10" width="15" height="10" rx="1.5" stroke={color} strokeWidth="1.7" />
+      <Path d="M4.5 13.5h15M12 10v10" stroke={color} strokeWidth="1.6" strokeLinecap="round" />
+      <Path
+        d="M12 10c-1.8-2.8-4.8-3.2-5.8-1.6C5 10 6.6 11.5 12 10z"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M12 10c1.8-2.8 4.8-3.2 5.8-1.6C19 10 17.4 11.5 12 10z"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+function DonationGlyph({ color, size }: { color: string; size: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M12 19.5s-6.2-3.7-6.2-8.6A3.6 3.6 0 0 1 12 8a3.6 3.6 0 0 1 6.2 2.9c0 4.9-6.2 8.6-6.2 8.6z"
+        stroke={color}
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M4.5 11.5c1.2.3 2.4.2 3.5-.3M19.5 11.5c-1.2.3-2.4.2-3.5-.3"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        opacity={0.75}
+      />
+    </Svg>
+  );
+}
+
+function InsuranceGlyph({ color, size }: { color: string; size: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M12 3.5l7 3v5.2c0 4.4-3 7.4-7 8.8-4-1.4-7-4.4-7-8.8V6.5l7-3z"
+        stroke={color}
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M9.2 12.2l2 2 4-4.2"
+        stroke={color}
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+function PersonalCareGlyph({ color, size }: { color: string; size: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Circle cx="12" cy="7.2" r="3" stroke={color} strokeWidth="1.7" />
+      <Path
+        d="M6.5 19.2c.7-3.2 2.8-4.8 5.5-4.8s4.8 1.6 5.5 4.8"
+        stroke={color}
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+      <Path
+        d="M16.8 5.2c1.2-.2 2.2.5 2.4 1.6M6.8 5.2C5.6 5 4.6 5.7 4.4 6.8"
+        stroke={color}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        opacity={0.75}
+      />
+    </Svg>
+  );
+}
+
 function OtherGlyph({ color, size }: { color: string; size: number }) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
@@ -143,22 +269,38 @@ const GLYPHS: Record<string, React.FC<{ color: string; size: number }>> = {
   transport: TransportGlyph,
   entertainment: EntertainmentGlyph,
   bills: BillsGlyph,
+  rent: RentGlyph,
+  taxes: TaxesGlyph,
+  gifts: GiftsGlyph,
+  donation: DonationGlyph,
+  insurance: InsuranceGlyph,
+  personal_care: PersonalCareGlyph,
   health: HealthGlyph,
   other: OtherGlyph,
 };
 
 /**
  * Relatable category icon (SVG). Used on cards when merchant is unknown,
- * and in category chips / badges.
+ * and in category chips / badges. Prefer admin-uploaded/fetched iconUrl when set.
  */
 export const CategoryIcon = memo(function CategoryIcon({ categoryId, size = 46, withBackground = true }: Props) {
   const storeConfig = useCategoryStore(s => s.getConfig(categoryId));
   const config = storeConfig || getCategoryConfig(categoryId);
+  const uri = config.iconUrl?.trim();
+  const HasGlyph = !!(GLYPHS[config.id] || GLYPHS[categoryId]);
   const Glyph = GLYPHS[config.id] || GLYPHS[categoryId] || OtherGlyph;
   const glyphSize = Math.round(size * (withBackground ? 0.52 : 0.9));
 
+  const inner = uri ? (
+    <RemoteIcon uri={uri} size={glyphSize} color={config.color} fallback={config.emoji} />
+  ) : HasGlyph ? (
+    <Glyph color={config.color} size={glyphSize} />
+  ) : (
+    <Text style={{ fontSize: glyphSize * 0.85 }}>{config.emoji || (config.label || '?')[0]}</Text>
+  );
+
   if (!withBackground) {
-    return <Glyph color={config.color} size={glyphSize} />;
+    return <>{inner}</>;
   }
 
   return (
@@ -174,7 +316,7 @@ export const CategoryIcon = memo(function CategoryIcon({ categoryId, size = 46, 
         },
       ]}
     >
-      <Glyph color={config.color} size={glyphSize} />
+      {inner}
     </View>
   );
 });
@@ -191,8 +333,18 @@ export const CategoryGlyph = memo(function CategoryGlyph({
 }) {
   const storeConfig = useCategoryStore(s => s.getConfig(categoryId));
   const config = storeConfig || getCategoryConfig(categoryId);
+  const uri = config.iconUrl?.trim();
+
+  if (uri) {
+    return <RemoteIcon uri={uri} size={size} color={color || config.color} fallback={config.emoji} />;
+  }
+
   const Glyph = GLYPHS[config.id] || GLYPHS[categoryId];
   if (!Glyph) {
+    // Custom / unknown: prefer emoji, then first letter
+    if (config.emoji) {
+      return <Text style={{ fontSize: size * 0.95 }}>{config.emoji}</Text>;
+    }
     return (
       <Text style={{ fontSize: size * 0.9, color: color || config.color, fontWeight: '700' }}>
         {(config.label || '?')[0]}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Keyboard,
+  ActivityIndicator,
 } from 'react-native';
 import Animated, {
   Easing,
@@ -25,13 +26,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CategoryId, MerchantId } from '../types/expense';
 import { DEFAULT_MERCHANT, getMerchantConfig } from '../constants/merchants';
 import { CATEGORIES, getCategoryConfig } from '../constants/categories';
-import { useCategoryStore } from '../store/categoryStore';
+import { useCategoryStore, IconSuggestion } from '../store/categoryStore';
+import { useExpenseStore } from '../store/expenseStore';
 import { useMerchantStore } from '../store/merchantStore';
 import { MerchantIcon } from './MerchantIcon';
 import { CategoryGlyph, CategoryIcon } from './CategoryIcon';
+import { RemoteIcon } from './RemoteIcon';
 import { VoiceButton } from './VoiceButton';
 import { ExpenseDatePicker } from './ExpenseDatePicker';
 import { parseExpenseText } from '../utils/expenseParser';
+import { userFacingError } from '../utils/userFacingError';
 import { Spacing, Typography, Radius } from '../constants/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useAppAlert } from './AppAlert';
@@ -74,8 +78,18 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
   const [parsed, setParsed] = useState<ReturnType<typeof parseExpenseText> | null>(null);
   const [newCategoryLabel, setNewCategoryLabel] = useState('');
   const [addingCategory, setAddingCategory] = useState(false);
+  const [pickedEmoji, setPickedEmoji] = useState('✨');
+  const [pickedIconUrl, setPickedIconUrl] = useState('');
+  const [suggestEmojis, setSuggestEmojis] = useState<string[]>(['✨', '⭐', '💜', '📦', '🔖', '🧡']);
+  const [suggestIcons, setSuggestIcons] = useState<IconSuggestion[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const suggestTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const categoryOptions = useCategoryStore(s => (s.all.length ? s.all : CATEGORIES));
+  const customCategories = useCategoryStore(s => s.custom);
+  const customIds = useMemo(() => new Set(customCategories.map(c => c.id)), [customCategories]);
   const addCustomCategory = useCategoryStore(s => s.addCustomCategory);
+  const deleteCustomCategory = useCategoryStore(s => s.deleteCustomCategory);
+  const fetchIconSuggestions = useCategoryStore(s => s.fetchIconSuggestions);
   const loadCategories = useCategoryStore(s => s.loadCategories);
   const merchantOptions = useMerchantStore(s => s.all);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
@@ -93,6 +107,10 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
     setSelectedCategory('other');
     setParsed(null);
     setNewCategoryLabel('');
+    setPickedEmoji('✨');
+    setPickedIconUrl('');
+    setSuggestEmojis(['✨', '⭐', '💜', '📦', '🔖', '🧡']);
+    setSuggestIcons([]);
     setSaving(false);
     setExpenseDate(new Date().toISOString());
   }, []);
@@ -105,6 +123,102 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
       loadCategories();
     }
   }, [visible, reset, loadCategories]);
+
+  // Auto-fetch emoji + SVG suggestions as user types the new category name
+  useEffect(() => {
+    if (suggestTimer.current) clearTimeout(suggestTimer.current);
+    const q = newCategoryLabel.trim();
+    if (q.length < 2) {
+      setSuggestIcons([]);
+      setLoadingSuggestions(false);
+      return;
+    }
+    setLoadingSuggestions(true);
+    suggestTimer.current = setTimeout(() => {
+      fetchIconSuggestions(q)
+        .then(data => {
+          if (data.emojis?.length) setSuggestEmojis(data.emojis);
+          setSuggestIcons(data.icons || []);
+          // Prefer first emoji guess when still on default
+          if (data.emojis?.[0] && pickedEmoji === '✨' && !pickedIconUrl) {
+            setPickedEmoji(data.emojis[0]);
+          }
+        })
+        .finally(() => setLoadingSuggestions(false));
+    }, 450);
+    return () => {
+      if (suggestTimer.current) clearTimeout(suggestTimer.current);
+    };
+  }, [newCategoryLabel, fetchIconSuggestions]);
+
+  const handleDeleteCustom = (slug: string, label: string) => {
+    showAlert(
+      'Delete category?',
+      `“${label}” will be removed. Expenses in this category move to Other.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              const { movedCount } = await deleteCustomCategory(slug);
+              useExpenseStore.setState(s => ({
+                expenses: s.expenses.map(e =>
+                  e.category === slug ? { ...e, category: 'other' as CategoryId } : e,
+                ),
+              }));
+              if (selectedCategory === slug) setSelectedCategory('other');
+              showAlert(
+                'Deleted',
+                movedCount
+                  ? `${movedCount} expense${movedCount === 1 ? '' : 's'} moved to Other.`
+                  : 'Category removed.',
+                undefined,
+                '✅',
+              );
+            } catch (err: any) {
+              showAlert(
+                'Category',
+                userFacingError(err, 'Couldn’t delete this category.'),
+                undefined,
+                '⚠️',
+              );
+            }
+          },
+        },
+      ],
+      '🗑️',
+    );
+  };
+
+  const handleAddCustom = async () => {
+    const label = newCategoryLabel.trim();
+    if (!label) return;
+    setAddingCategory(true);
+    try {
+      const created = await addCustomCategory({
+        label,
+        emoji: pickedIconUrl ? '✨' : pickedEmoji || '✨',
+        iconUrl: pickedIconUrl || undefined,
+      });
+      setSelectedCategory(created.id);
+      setNewCategoryLabel('');
+      setPickedEmoji('✨');
+      setPickedIconUrl('');
+      setSuggestIcons([]);
+      ReactNativeHapticFeedback.trigger('impactLight');
+    } catch (err: any) {
+      showAlert(
+        'Category',
+        userFacingError(err, 'Couldn’t add this category. Please try again.'),
+        undefined,
+        '⚠️',
+      );
+    } finally {
+      setAddingCategory(false);
+    }
+  };
 
   useEffect(() => {
     const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -194,7 +308,12 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
       ReactNativeHapticFeedback.trigger('impactMedium');
       onClose();
     } catch (err) {
-      showAlert('Save Failed', 'Could not save the expense. Please try again.', undefined, '❌');
+      showAlert(
+        'Couldn’t save',
+        'Your expense wasn’t saved. Please check your connection and try again.',
+        undefined,
+        '❌',
+      );
       console.error('Save expense error:', err);
     } finally {
       setSaving(false);
@@ -349,7 +468,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                           style={styles.smartInput}
                           value={smartInput}
                           onChangeText={handleSmartInputChange}
-                          placeholder='e.g. "Blinkit 200" or "Swiggy 350"'
+                          placeholder='e.g. "Blinkit 200" or "12 + 20 pizza"'
                           placeholderTextColor={colors.textMuted}
                           returnKeyType="done"
                           blurOnSubmit={false}
@@ -482,18 +601,49 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                       </ScrollView>
                       <Text style={styles.label}>Category</Text>
                       <View style={styles.categoryGrid}>
-                        {categoryOptions.map(c => (
-                          <Pressable
-                            key={c.id}
-                            style={[styles.categoryChip, selectedCategory === c.id && { borderColor: c.color, backgroundColor: c.color + '22' }]}
-                            onPress={() => setSelectedCategory(c.id)}
-                          >
-                            <CategoryGlyph categoryId={c.id} size={16} color={selectedCategory === c.id ? c.color : undefined} />
-                            <Text style={[styles.categoryChipText, selectedCategory === c.id && { color: c.color }]}>
-                              {c.label}
-                            </Text>
-                          </Pressable>
-                        ))}
+                        {categoryOptions.map(c => {
+                          const isCustom = customIds.has(c.id) || c.source === 'custom';
+                          const selected = selectedCategory === c.id;
+                          return (
+                            <Pressable
+                              key={c.id}
+                              style={[
+                                styles.categoryChip,
+                                selected && { borderColor: c.color, backgroundColor: c.color + '22' },
+                              ]}
+                              onPress={() => setSelectedCategory(c.id)}
+                              onLongPress={
+                                isCustom
+                                  ? () => handleDeleteCustom(c.id, c.label)
+                                  : undefined
+                              }
+                              delayLongPress={420}
+                            >
+                              <CategoryGlyph
+                                categoryId={c.id}
+                                size={16}
+                                color={selected ? c.color : undefined}
+                              />
+                              <Text
+                                style={[
+                                  styles.categoryChipText,
+                                  selected && { color: c.color },
+                                ]}
+                              >
+                                {c.label}
+                              </Text>
+                              {isCustom ? (
+                                <Pressable
+                                  hitSlop={8}
+                                  onPress={() => handleDeleteCustom(c.id, c.label)}
+                                  style={styles.catDeleteBtn}
+                                >
+                                  <Text style={styles.catDeleteX}>×</Text>
+                                </Pressable>
+                              ) : null}
+                            </Pressable>
+                          );
+                        })}
                       </View>
                       <View style={styles.addCatRow}>
                         <TextInput
@@ -506,22 +656,75 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                         <Pressable
                           style={[styles.quickChip, addingCategory && { opacity: 0.5 }]}
                           disabled={addingCategory || !newCategoryLabel.trim()}
-                          onPress={async () => {
-                            setAddingCategory(true);
-                            try {
-                              const created = await addCustomCategory(newCategoryLabel.trim());
-                              setSelectedCategory(created.id);
-                              setNewCategoryLabel('');
-                            } catch (err: any) {
-                              showAlert('Category', err?.message || 'Could not add', undefined, '⚠️');
-                            } finally {
-                              setAddingCategory(false);
-                            }
-                          }}
+                          onPress={handleAddCustom}
                         >
                           <Text style={styles.quickChipText}>{addingCategory ? '…' : '+ Add'}</Text>
                         </Pressable>
                       </View>
+                      {newCategoryLabel.trim().length >= 2 ? (
+                        <View style={styles.iconPickerBox}>
+                          <View style={styles.iconPickerHeader}>
+                            <Text style={styles.iconPickerTitle}>Pick icon</Text>
+                            {loadingSuggestions ? (
+                              <ActivityIndicator size="small" color={colors.primary} />
+                            ) : null}
+                          </View>
+                          <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            keyboardShouldPersistTaps="handled"
+                            contentContainerStyle={styles.iconPickerRow}
+                          >
+                            {suggestEmojis.map(em => {
+                              const on = !pickedIconUrl && pickedEmoji === em;
+                              return (
+                                <Pressable
+                                  key={`em-${em}`}
+                                  style={[styles.iconPickChip, on && styles.iconPickChipOn]}
+                                  onPress={() => {
+                                    setPickedEmoji(em);
+                                    setPickedIconUrl('');
+                                  }}
+                                >
+                                  <Text style={styles.iconPickEmoji}>{em}</Text>
+                                </Pressable>
+                              );
+                            })}
+                          </ScrollView>
+                          {suggestIcons.length > 0 ? (
+                            <ScrollView
+                              horizontal
+                              showsHorizontalScrollIndicator={false}
+                              keyboardShouldPersistTaps="handled"
+                              contentContainerStyle={styles.iconPickerRow}
+                            >
+                              {suggestIcons.map(ic => {
+                                const on = pickedIconUrl === ic.url;
+                                return (
+                                  <Pressable
+                                    key={ic.key}
+                                    style={[styles.iconPickChip, on && styles.iconPickChipOn]}
+                                    onPress={() => {
+                                      setPickedIconUrl(ic.url);
+                                    }}
+                                  >
+                                    <RemoteIcon
+                                      uri={ic.url}
+                                      svgXml={ic.svg}
+                                      size={24}
+                                      color={colors.primary}
+                                      fallback="✦"
+                                    />
+                                  </Pressable>
+                                );
+                              })}
+                            </ScrollView>
+                          ) : null}
+                          <Text style={styles.iconPickerHint}>
+                            Emoji or SVG from your category name · long-press a custom chip to delete
+                          </Text>
+                        </View>
+                      ) : null}
                       <Pressable
                         style={[styles.saveBtn, !amount && styles.saveBtnDisabled]}
                         onPress={handleManualSave}
@@ -727,6 +930,69 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       backgroundColor: colors.surfaceElevated,
     },
     categoryChipText: { ...Typography.small, color: colors.textSecondary },
+    catDeleteBtn: {
+      marginLeft: 2,
+      width: 16,
+      height: 16,
+      borderRadius: 8,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.border,
+    },
+    catDeleteX: {
+      fontSize: 13,
+      lineHeight: 15,
+      color: colors.textMuted,
+      fontWeight: '700',
+      marginTop: -1,
+    },
+    iconPickerBox: {
+      marginBottom: Spacing.sm,
+      padding: Spacing.sm,
+      borderRadius: Radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surfaceElevated,
+      gap: Spacing.xs,
+    },
+    iconPickerHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 2,
+    },
+    iconPickerTitle: {
+      ...Typography.small,
+      color: colors.textSecondary,
+      fontWeight: '600',
+    },
+    iconPickerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      paddingVertical: 4,
+    },
+    iconPickChip: {
+      width: 40,
+      height: 40,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.surface,
+    },
+    iconPickChipOn: {
+      borderColor: colors.primary,
+      backgroundColor: colors.primary + '22',
+    },
+    iconPickEmoji: { fontSize: 20 },
+    iconPickerHint: {
+      ...Typography.small,
+      fontSize: 11,
+      color: colors.textMuted,
+      marginTop: 2,
+    },
     saveBtn: {
       borderRadius: Radius.lg,
       overflow: 'hidden',

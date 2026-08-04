@@ -1,4 +1,4 @@
-package com.expensewise
+package com.kriovent.expenso
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule
@@ -7,7 +7,7 @@ import com.facebook.react.uimanager.ViewManager
 
 class ApiConfigPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
-    listOf(ApiConfigModule(reactContext))
+    listOf(ApiConfigModule(reactContext), ExpenseWidgetModule(reactContext))
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =
     emptyList()

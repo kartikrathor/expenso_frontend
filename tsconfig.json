@@ -1,8 +1,12 @@
 {
   "extends": "@react-native/typescript-config",
   "compilerOptions": {
-    "types": ["jest"]
+    "types": ["jest"],
+    "skipLibCheck": true,
+    "paths": {
+      "react-native-iap": ["./node_modules/react-native-iap/lib/typescript/src/index.d.ts"]
+    }
   },
-  "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["**/node_modules", "**/Pods"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "App.tsx", "index.js", "__tests__/**/*.ts"],
+  "exclude": ["**/node_modules", "**/Pods", "android", "ios"]
 }

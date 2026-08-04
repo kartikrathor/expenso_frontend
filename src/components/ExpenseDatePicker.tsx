@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import Svg, { Path, Rect } from 'react-native-svg';
 import {
@@ -24,6 +24,13 @@ type ExpenseDatePickerProps = {
   valueIso: string;
   onChange: (iso: string) => void;
   label?: string;
+  /** Tighter trigger + short date label (Insights custom range). */
+  compact?: boolean;
+  /** Controlled open — omit for internal toggle. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Show only the calendar panel (parent owns the trigger). */
+  panelOnly?: boolean;
 };
 
 const WEEKDAYS = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
@@ -48,10 +55,19 @@ export function ExpenseDatePicker({
   valueIso,
   onChange,
   label = 'Date',
+  compact = false,
+  open: openProp,
+  onOpenChange,
+  panelOnly = false,
 }: ExpenseDatePickerProps) {
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
-  const [open, setOpen] = useState(false);
+  const styles = useMemo(() => createStyles(colors, compact), [colors, compact]);
+  const [openInternal, setOpenInternal] = useState(false);
+  const open = openProp ?? openInternal;
+  const setOpen = (next: boolean) => {
+    onOpenChange?.(next);
+    if (openProp === undefined) setOpenInternal(next);
+  };
   const selected = useMemo(() => {
     try {
       const d = parseISO(valueIso);
@@ -62,9 +78,12 @@ export function ExpenseDatePicker({
   }, [valueIso]);
   const [monthCursor, setMonthCursor] = useState(() => startOfDay(selected));
 
+  useEffect(() => {
+    if (open) setMonthCursor(startOfDay(selected));
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps -- only snap when panel opens
+
   const toggle = () => {
-    if (!open) setMonthCursor(startOfDay(selected));
-    setOpen(v => !v);
+    setOpen(!open);
   };
 
   const pickDay = (day: Date) => {
@@ -80,23 +99,41 @@ export function ExpenseDatePicker({
     (addMonths(monthCursor, 1).getFullYear() === today.getFullYear() &&
       addMonths(monthCursor, 1).getMonth() <= today.getMonth());
 
+  const valueLabel = compact
+    ? (() => {
+        try {
+          const d = parseISO(valueIso);
+          if (Number.isNaN(d.getTime())) return 'Pick date';
+          if (isToday(d)) return `Today · ${format(d, 'd MMM')}`;
+          if (isYesterday(d)) return `Yesterday · ${format(d, 'd MMM')}`;
+          return format(d, 'd MMM yyyy');
+        } catch {
+          return 'Pick date';
+        }
+      })()
+    : formatExpenseDayLabel(valueIso);
+
   return (
     <View style={styles.wrap}>
-      <Pressable style={styles.row} onPress={toggle}>
-        <View style={styles.rowLeft}>
-          <View style={styles.iconWrap}>
-            <CalendarIcon color={colors.primaryLight} size={18} />
+      {!panelOnly ? (
+        <Pressable style={styles.row} onPress={toggle}>
+          <View style={styles.rowLeft}>
+            <View style={styles.iconWrap}>
+              <CalendarIcon color={colors.primaryLight} size={compact ? 16 : 18} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.rowLabel}>{label}</Text>
+              <Text style={styles.rowValue} numberOfLines={1}>
+                {valueLabel}
+              </Text>
+            </View>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.rowLabel}>{label}</Text>
-            <Text style={styles.rowValue}>{formatExpenseDayLabel(valueIso)}</Text>
-          </View>
-        </View>
-        <Text style={styles.chevron}>{open ? '▾' : '›'}</Text>
-      </Pressable>
+          <Text style={styles.chevron}>{open ? '▾' : '›'}</Text>
+        </Pressable>
+      ) : null}
 
       {open && (
-        <View style={styles.panel}>
+        <View style={[styles.panel, panelOnly && styles.panelFlush]}>
           <View style={styles.quickRow}>
             <Pressable
               style={[styles.quickChip, isToday(selected) && styles.quickChipActive]}
@@ -126,7 +163,9 @@ export function ExpenseDatePicker({
             >
               <Text style={styles.navBtnText}>‹</Text>
             </Pressable>
-            <Text style={styles.monthLabel}>{format(monthCursor, 'MMMM yyyy')}</Text>
+            <Text style={styles.monthLabel} numberOfLines={1}>
+              {format(monthCursor, 'MMM yyyy')}
+            </Text>
             <Pressable
               hitSlop={10}
               disabled={!canGoNextMonth}
@@ -141,9 +180,9 @@ export function ExpenseDatePicker({
 
           <View style={styles.weekRow}>
             {WEEKDAYS.map(d => (
-              <Text key={d} style={styles.weekDay}>
-                {d}
-              </Text>
+              <View key={d} style={styles.dayCell}>
+                <Text style={styles.weekDay}>{d}</Text>
+              </View>
             ))}
           </View>
 
@@ -185,9 +224,18 @@ export function ExpenseDatePicker({
   );
 }
 
-function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
+function createStyles(
+  colors: ReturnType<typeof useTheme>['colors'],
+  compact: boolean,
+) {
+  const cellPct = `${100 / 7}%` as unknown as number;
   return StyleSheet.create({
-    wrap: { marginTop: Spacing.md, width: '100%' },
+    wrap: {
+      marginTop: compact ? 0 : Spacing.md,
+      width: '100%',
+      maxWidth: '100%',
+      alignSelf: 'stretch',
+    },
     row: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -196,13 +244,20 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderRadius: Radius.lg,
       borderWidth: 1,
       borderColor: colors.border,
-      paddingHorizontal: Spacing.md,
-      paddingVertical: Spacing.sm + 2,
+      paddingHorizontal: compact ? Spacing.sm + 2 : Spacing.md,
+      paddingVertical: compact ? Spacing.sm : Spacing.sm + 2,
+      maxWidth: '100%',
     },
-    rowLeft: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flex: 1 },
+    rowLeft: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: compact ? Spacing.xs + 2 : Spacing.sm,
+      flex: 1,
+      minWidth: 0,
+    },
     iconWrap: {
-      width: 36,
-      height: 36,
+      width: compact ? 32 : 36,
+      height: compact ? 32 : 36,
       borderRadius: Radius.md,
       backgroundColor: colors.primary + '22',
       borderWidth: 1,
@@ -211,17 +266,40 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       justifyContent: 'center',
     },
     rowLabel: { ...Typography.small, color: colors.textMuted },
-    rowValue: { ...Typography.body, color: colors.text, fontWeight: '600' },
-    chevron: { fontSize: 18, color: colors.textMuted, fontWeight: '600', paddingLeft: Spacing.sm },
+    rowValue: {
+      ...Typography.body,
+      color: colors.text,
+      fontWeight: '600',
+      fontSize: compact ? 13 : Typography.body.fontSize,
+    },
+    chevron: {
+      fontSize: 18,
+      color: colors.textMuted,
+      fontWeight: '600',
+      paddingLeft: Spacing.sm,
+      flexShrink: 0,
+    },
     panel: {
       marginTop: Spacing.sm,
       backgroundColor: colors.surface,
       borderRadius: Radius.lg,
       borderWidth: 1,
       borderColor: colors.border,
-      padding: Spacing.md,
+      padding: Spacing.sm + 2,
+      width: '100%',
+      maxWidth: '100%',
+      overflow: 'hidden',
     },
-    quickRow: { flexDirection: 'row', gap: Spacing.sm, marginBottom: Spacing.md },
+    panelFlush: {
+      marginTop: 0,
+      backgroundColor: colors.background,
+    },
+    quickRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: Spacing.sm,
+      marginBottom: Spacing.md,
+    },
     quickChip: {
       paddingHorizontal: Spacing.md,
       paddingVertical: Spacing.sm,
@@ -241,6 +319,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       alignItems: 'center',
       justifyContent: 'space-between',
       marginBottom: Spacing.sm,
+      gap: Spacing.sm,
     },
     navBtn: {
       width: 36,
@@ -251,29 +330,36 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderColor: colors.border,
       alignItems: 'center',
       justifyContent: 'center',
+      flexShrink: 0,
     },
     navBtnDisabled: { opacity: 0.35 },
     navBtnText: { fontSize: 22, color: colors.text, lineHeight: 24 },
-    monthLabel: { ...Typography.bodyBold, color: colors.text },
-    weekRow: { flexDirection: 'row', marginBottom: 4 },
-    weekDay: {
-      width: `${100 / 7}%` as unknown as number,
+    monthLabel: {
+      ...Typography.bodyBold,
+      color: colors.text,
+      flex: 1,
       textAlign: 'center',
+    },
+    weekRow: { flexDirection: 'row', width: '100%', marginBottom: 4 },
+    weekDay: {
       ...Typography.small,
       color: colors.textMuted,
       fontWeight: '600',
+      textAlign: 'center',
+      fontSize: 11,
     },
-    grid: { flexDirection: 'row', flexWrap: 'wrap' },
+    grid: { flexDirection: 'row', flexWrap: 'wrap', width: '100%' },
     dayCell: {
-      width: `${100 / 7}%` as unknown as number,
+      width: cellPct,
       aspectRatio: 1,
+      maxWidth: cellPct,
       alignItems: 'center',
       justifyContent: 'center',
       borderRadius: Radius.full,
     },
     dayCellActive: { backgroundColor: colors.primary },
     dayCellDisabled: { opacity: 0.35 },
-    dayText: { ...Typography.body, color: colors.text },
+    dayText: { ...Typography.body, color: colors.text, fontSize: 14 },
     dayTextActive: { color: '#FFF', fontWeight: '700' },
     dayTextDisabled: { color: colors.textMuted },
     dayTextToday: { color: colors.primaryLight, fontWeight: '700' },

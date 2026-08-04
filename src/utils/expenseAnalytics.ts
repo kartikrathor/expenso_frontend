@@ -5,30 +5,130 @@ import {
   startOfDay,
   endOfDay,
   startOfMonth,
+  endOfMonth,
   startOfWeek,
+  endOfWeek,
   startOfYear,
+  endOfYear,
+  addWeeks,
+  addMonths,
+  format,
+  isSameWeek,
+  isSameMonth,
+  isSameYear,
+  isAfter,
 } from 'date-fns';
 import { Expense, TimeFilter } from '../types/expense';
+import { CATEGORIES } from '../constants/categories';
 
-const CATEGORY_COLORS: Record<string, string> = {
-  food: '#F472B6',
-  groceries: '#10B981',
-  shopping: '#818CF8',
-  transport: '#38BDF8',
-  entertainment: '#FBBF24',
-  bills: '#06B6D4',
-  health: '#F87171',
-  other: '#94A3B8',
+const CATEGORY_COLORS: Record<string, string> = Object.fromEntries(
+  CATEGORIES.map(c => [c.id, c.color]),
+);
+
+export type DateRange = { start: Date; end: Date };
+
+/** Rich filter used by Insights (and optionally Home). */
+export type TimeFilterOptions = {
+  filter: TimeFilter;
+  /** Which week / month / year window (defaults to now). */
+  anchor?: Date;
+  /** When filter is `all`, optional custom From–To range. */
+  customRange?: DateRange | null;
 };
 
-function filterStart(filter: TimeFilter): Date | null {
-  const now = new Date();
-  switch (filter) {
-    case 'week': return startOfWeek(now, { weekStartsOn: 1 });
-    case 'month': return startOfMonth(now);
-    case 'year': return startOfYear(now);
-    default: return null;
+function normalizeOpts(filterOrOpts: TimeFilter | TimeFilterOptions): TimeFilterOptions {
+  if (typeof filterOrOpts === 'string') return { filter: filterOrOpts };
+  return filterOrOpts;
+}
+
+/** Closed calendar interval for the selection, or null = all time. */
+export function resolveFilterInterval(
+  filterOrOpts: TimeFilter | TimeFilterOptions,
+): DateRange | null {
+  const opts = normalizeOpts(filterOrOpts);
+  const anchor = opts.anchor ?? new Date();
+
+  if (opts.filter === 'all') {
+    if (opts.customRange?.start && opts.customRange?.end) {
+      const a = startOfDay(opts.customRange.start);
+      const b = endOfDay(opts.customRange.end);
+      return a.getTime() <= b.getTime() ? { start: a, end: b } : { start: b, end: a };
+    }
+    return null;
   }
+
+  if (opts.filter === 'week') {
+    return {
+      start: startOfWeek(anchor, { weekStartsOn: 1 }),
+      end: endOfWeek(anchor, { weekStartsOn: 1 }),
+    };
+  }
+  if (opts.filter === 'month') {
+    return { start: startOfMonth(anchor), end: endOfMonth(anchor) };
+  }
+  return { start: startOfYear(anchor), end: endOfYear(anchor) };
+}
+
+export function formatTimeFilterAnchor(filter: TimeFilter, anchor: Date): string {
+  const now = new Date();
+  if (filter === 'week') {
+    const s = startOfWeek(anchor, { weekStartsOn: 1 });
+    const e = endOfWeek(anchor, { weekStartsOn: 1 });
+    const range = `${format(s, 'd MMM')} – ${format(e, 'd MMM')}`;
+    if (isSameWeek(anchor, now, { weekStartsOn: 1 })) return `This week · ${range}`;
+    return range;
+  }
+  if (filter === 'month') {
+    const label = format(anchor, 'MMM yyyy');
+    if (isSameMonth(anchor, now)) return `This month · ${label}`;
+    return label;
+  }
+  if (filter === 'year') {
+    const label = format(anchor, 'yyyy');
+    if (isSameYear(anchor, now)) return `This year · ${label}`;
+    return label;
+  }
+  return 'All time';
+}
+
+export function shiftTimeFilterAnchor(
+  filter: TimeFilter,
+  anchor: Date,
+  dir: -1 | 1,
+): Date {
+  if (filter === 'week') return addWeeks(anchor, dir);
+  if (filter === 'month') return addMonths(anchor, dir);
+  if (filter === 'year') {
+    const d = new Date(anchor);
+    d.setFullYear(d.getFullYear() + dir);
+    return d;
+  }
+  return anchor;
+}
+
+/** Block navigating into a future week/month/year beyond the current one. */
+export function canShiftTimeFilterForward(filter: TimeFilter, anchor: Date): boolean {
+  if (filter === 'all') return false;
+  const next = shiftTimeFilterAnchor(filter, anchor, 1);
+  const now = new Date();
+  if (filter === 'week') {
+    return !isAfter(
+      startOfWeek(next, { weekStartsOn: 1 }),
+      startOfWeek(now, { weekStartsOn: 1 }),
+    );
+  }
+  if (filter === 'month') {
+    return !isAfter(startOfMonth(next), startOfMonth(now));
+  }
+  return !isAfter(startOfYear(next), startOfYear(now));
+}
+
+export function isCurrentPeriod(filter: TimeFilter, anchor: Date): boolean {
+  const now = new Date();
+  if (filter === 'week') return isSameWeek(anchor, now, { weekStartsOn: 1 });
+  if (filter === 'month') return isSameMonth(anchor, now);
+  if (filter === 'year') return isSameYear(anchor, now);
+  return true;
 }
 
 function safeExpenseDay(dateStr: string): Date | null {
@@ -41,15 +141,20 @@ function safeExpenseDay(dateStr: string): Date | null {
   }
 }
 
-export function filterExpenses(expenses: Expense[], filter: TimeFilter): Expense[] {
-  const start = filterStart(filter);
-  if (!start) return expenses;
-  const end = endOfDay(new Date());
+export function filterExpenses(
+  expenses: Expense[],
+  filterOrOpts: TimeFilter | TimeFilterOptions,
+): Expense[] {
+  const interval = resolveFilterInterval(filterOrOpts);
+  if (!interval) return expenses;
   return expenses.filter(e => {
     const d = safeExpenseDay(e.date);
     // Bad/missing dates: still show (don't hide partner sync items)
     if (!d) return true;
-    return isWithinInterval(d, { start: startOfDay(start), end });
+    return isWithinInterval(d, {
+      start: startOfDay(interval.start),
+      end: endOfDay(interval.end),
+    });
   });
 }
 
@@ -61,24 +166,31 @@ export function sortByNewest(expenses: Expense[]): Expense[] {
   });
 }
 
-
-export function totalSpent(expenses: Expense[], filter: TimeFilter): number {
-  return filterExpenses(expenses, filter).reduce((sum, e) => sum + e.amount, 0);
+export function totalSpent(
+  expenses: Expense[],
+  filterOrOpts: TimeFilter | TimeFilterOptions,
+): number {
+  return filterExpenses(expenses, filterOrOpts).reduce((sum, e) => sum + e.amount, 0);
 }
 
 export function todaySpent(expenses: Expense[]): number {
-  return expenses.filter(e => {
-    try {
-      return isToday(parseISO(e.date));
-    } catch {
-      return false;
-    }
-  }).reduce((sum, e) => sum + e.amount, 0);
+  return expenses
+    .filter(e => {
+      try {
+        return isToday(parseISO(e.date));
+      } catch {
+        return false;
+      }
+    })
+    .reduce((sum, e) => sum + e.amount, 0);
 }
 
-export function categoryBreakdown(expenses: Expense[], filter: TimeFilter) {
+export function categoryBreakdown(
+  expenses: Expense[],
+  filterOrOpts: TimeFilter | TimeFilterOptions,
+) {
   const map = new Map<string, number>();
-  filterExpenses(expenses, filter).forEach(e => {
+  filterExpenses(expenses, filterOrOpts).forEach(e => {
     map.set(e.category, (map.get(e.category) ?? 0) + e.amount);
   });
   return Array.from(map.entries())
@@ -90,9 +202,12 @@ export function categoryBreakdown(expenses: Expense[], filter: TimeFilter) {
     .sort((a, b) => b.amount - a.amount);
 }
 
-export function merchantBreakdown(expenses: Expense[], filter: TimeFilter) {
+export function merchantBreakdown(
+  expenses: Expense[],
+  filterOrOpts: TimeFilter | TimeFilterOptions,
+) {
   const map = new Map<string, number>();
-  filterExpenses(expenses, filter).forEach(e => {
+  filterExpenses(expenses, filterOrOpts).forEach(e => {
     map.set(e.merchantLabel, (map.get(e.merchantLabel) ?? 0) + e.amount);
   });
   return Array.from(map.entries())
@@ -101,14 +216,22 @@ export function merchantBreakdown(expenses: Expense[], filter: TimeFilter) {
     .slice(0, 8);
 }
 
-export function dailySpending(expenses: Expense[], filter: TimeFilter) {
+export function dailySpending(
+  expenses: Expense[],
+  filterOrOpts: TimeFilter | TimeFilterOptions,
+) {
+  const opts = normalizeOpts(filterOrOpts);
   const map = new Map<string, number>();
-  filterExpenses(expenses, filter).forEach(e => {
+  filterExpenses(expenses, filterOrOpts).forEach(e => {
     const day = e.date.split('T')[0];
     map.set(day, (map.get(day) ?? 0) + e.amount);
   });
-  return Array.from(map.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .slice(-7)
-    .map(([label, value]) => ({ label: label.slice(5), value }));
+  const points = Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
+
+  // Cap chart density: week ~7, month ~31, year/custom keep last 31 spend-days
+  const limit = opts.filter === 'week' ? 7 : 31;
+  return points.slice(-limit).map(([label, value]) => ({
+    label: label.slice(5),
+    value,
+  }));
 }

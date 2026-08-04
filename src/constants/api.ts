@@ -3,6 +3,10 @@ import { NativeModules, Platform } from 'react-native';
 /** Production API (Render) — used for release builds */
 export const PROD_API_BASE_URL = 'https://expenso-backend-f61z.onrender.com';
 
+/** Public legal pages (always production host — for Play Console + in-app) */
+export const LEGAL_PRIVACY_URL = `${PROD_API_BASE_URL}/privacy`;
+export const LEGAL_TERMS_URL = `${PROD_API_BASE_URL}/terms`;
+
 /**
  * Optional: Mac Wi‑Fi IP for wireless debugging (phone + Mac same network).
  * Leave empty when using USB — then 127.0.0.1 + `adb reverse` is used.
@@ -30,7 +34,7 @@ export const API_BASE_URL = __DEV__
     ? nativeApiBaseUrl
     : PROD_API_BASE_URL;
 
-/** Shown in error messages */
+/** Dev-only setup hint (logged in __DEV__, never shown to users) */
 export const API_HINT = API_BASE_URL.includes('onrender.com')
   ? 'Check your internet. Free Render may take ~30s to wake.'
   : Platform.OS === 'android'

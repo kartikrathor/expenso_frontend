@@ -259,6 +259,11 @@ export function HistoryScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           stickySectionHeadersEnabled={false}
+          initialNumToRender={10}
+          maxToRenderPerBatch={8}
+          windowSize={5}
+          updateCellsBatchingPeriod={50}
+          removeClippedSubviews
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -301,6 +306,11 @@ export function HistoryScreen() {
           contentContainerStyle={{ paddingBottom: bottomPad }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          initialNumToRender={12}
+          maxToRenderPerBatch={8}
+          windowSize={5}
+          updateCellsBatchingPeriod={50}
+          removeClippedSubviews
           refreshControl={
             <RefreshControl
               refreshing={refreshing}

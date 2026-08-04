@@ -1,4 +1,4 @@
-package com.expensewise
+package com.kriovent.expenso
 
 import android.app.Application
 import com.facebook.react.PackageList

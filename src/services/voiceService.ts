@@ -77,7 +77,9 @@ function bindEvents() {
         return;
       }
 
-      handlers.onError?.(msg);
+      handlers.onError?.(
+        'Couldn’t hear clearly. Check the mic, speak a bit louder, and try again.',
+      );
     }),
   );
 }

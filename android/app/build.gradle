@@ -1,6 +1,7 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+apply plugin: "com.google.gms.google-services"
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -75,17 +76,23 @@ def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 def prodApiBaseUrl = "https://expenso-backend-f61z.onrender.com"
 def devApiBaseUrl = "http://127.0.0.1:4000"
 
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
 android {
     ndkVersion rootProject.ext.ndkVersion
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace "com.expensewise"
+    namespace "com.kriovent.expenso"
     buildFeatures {
         buildConfig true
     }
     defaultConfig {
-        applicationId "com.expensewise"
+        applicationId "com.kriovent.expenso"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
@@ -99,6 +106,14 @@ android {
             keyAlias 'androiddebugkey'
             keyPassword 'android'
         }
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+            }
+        }
     }
     buildTypes {
         debug {
@@ -106,9 +121,11 @@ android {
             buildConfigField "String", "API_BASE_URL", "\"${devApiBaseUrl}\""
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            // Upload key from android/keystore.properties + app/expenso-upload.keystore
+            // see https://reactnative.dev/docs/signed-apk-android
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
             minifyEnabled enableProguardInReleaseBuilds
             proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
             buildConfigField "String", "API_BASE_URL", "\"${prodApiBaseUrl}\""

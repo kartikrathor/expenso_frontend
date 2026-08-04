@@ -1,9 +1,12 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- Android 11+ package visibility: find speech recognition / Google voice -->
     <queries>
@@ -33,6 +36,10 @@
       android:theme="@style/AppTheme"
       android:usesCleartextTraffic="true"
       android:supportsRtl="true">
+      <meta-data
+        android:name="com.google.firebase.messaging.default_notification_channel_id"
+        android:value="expenso_default"
+        tools:replace="android:value" />
       <activity
         android:name=".MainActivity"
         android:label="@string/app_name"
@@ -44,6 +51,45 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent-filter>
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="expenso" android:host="add" />
+        </intent-filter>
+        <meta-data
+            android:name="android.app.shortcuts"
+            android:resource="@xml/shortcuts" />
       </activity>
+
+      <activity
+        android:name=".QuickAddExpenseActivity"
+        android:excludeFromRecents="true"
+        android:exported="true"
+        android:label="@string/quick_add_title"
+        android:launchMode="singleInstance"
+        android:taskAffinity=""
+        android:theme="@style/QuickAddTheme"
+        android:windowSoftInputMode="adjustResize">
+        <intent-filter>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.DEFAULT" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="expenso" android:host="quickadd" />
+        </intent-filter>
+      </activity>
+
+      <receiver
+        android:name=".ExpenseWidgetProvider"
+        android:exported="true"
+        android:label="@string/app_name">
+        <intent-filter>
+            <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            <action android:name="com.kriovent.expenso.WIDGET_SYNC" />
+        </intent-filter>
+        <meta-data
+            android:name="android.appwidget.provider"
+            android:resource="@xml/widget_expense_info" />
+      </receiver>
     </application>
 </manifest>

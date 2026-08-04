@@ -5,6 +5,7 @@ import { useAuthStore } from './authStore';
 import { useExpenseStore } from './expenseStore';
 import { CategoryId, Expense, MerchantId, TimeFilter } from '../types/expense';
 import { generateId } from '../utils/generateId';
+import { userFacingError } from '../utils/userFacingError';
 import {
   isToday,
   isWithinInterval,
@@ -141,10 +142,6 @@ function toJoint(g: GroupApi): JointAccount {
   };
 }
 
-const CATEGORIES: CategoryId[] = [
-  'food', 'groceries', 'shopping', 'transport', 'entertainment', 'bills', 'health', 'other',
-];
-
 function cacheKey(groupId: string) {
   return `@expenso_joint_cache_${groupId}`;
 }
@@ -169,9 +166,7 @@ function personName(
 }
 
 function toExpense(raw: JointExpenseRaw, group?: JointAccount): Expense {
-  const cat = CATEGORIES.includes(raw.category as CategoryId)
-    ? (raw.category as CategoryId)
-    : 'other';
+  const cat = (raw.category?.trim() || 'other') as CategoryId;
   const date = typeof raw.date === 'string' ? raw.date : new Date(raw.date).toISOString();
   const paidName = personName(raw.paidBy);
   const createdName = personName(raw.createdBy);
@@ -350,7 +345,10 @@ export const useJointStore = create<JointStore>((set, get) => ({
       await get().loadJointExpenses();
     } catch (err: any) {
       // Never clear expenses on network failure
-      set({ isBusy: false, error: err?.message || 'Could not load joint account' });
+      set({
+        isBusy: false,
+        error: userFacingError(err, 'Couldn’t load your joint account. Please try again.'),
+      });
     }
   },
 
@@ -412,7 +410,10 @@ export const useJointStore = create<JointStore>((set, get) => ({
       }
       return joint;
     } catch (err: any) {
-      set({ isBusy: false, error: err?.message || 'Could not create joint account' });
+      set({
+        isBusy: false,
+        error: userFacingError(err, 'Couldn’t create joint account. Please try again.'),
+      });
       return null;
     }
   },
@@ -448,7 +449,10 @@ export const useJointStore = create<JointStore>((set, get) => ({
       await get().loadJointExpenses();
       return joint;
     } catch (err: any) {
-      set({ isBusy: false, error: err?.message || 'Could not join joint account' });
+      set({
+        isBusy: false,
+        error: userFacingError(err, 'Couldn’t join. Check the invite code and try again.'),
+      });
       return null;
     }
   },
@@ -485,7 +489,10 @@ export const useJointStore = create<JointStore>((set, get) => ({
       });
       return true;
     } catch (err: any) {
-      set({ isBusy: false, error: err?.message || 'Could not leave joint account' });
+      set({
+        isBusy: false,
+        error: userFacingError(err, 'Couldn’t leave the joint account. Please try again.'),
+      });
       return false;
     }
   },
@@ -554,13 +561,15 @@ export const useJointStore = create<JointStore>((set, get) => ({
         const cached = await readCache(joint.id);
         if (cached.length) set({ expenses: cached });
       }
-      set({ error: err?.message || 'Could not load shared expenses' });
+      set({
+        error: userFacingError(err, 'Couldn’t load shared expenses. Please try again.'),
+      });
     }
   },
 
   addJointExpense: async payload => {
     const joint = get().joint;
-    if (!joint) throw new Error('No joint account');
+    if (!joint) throw new Error('Join or create a joint account first.');
 
     const clientId = `pending_${generateId()}`;
     const local = pendingExpense(clientId, payload, joint);
@@ -614,7 +623,7 @@ export const useJointStore = create<JointStore>((set, get) => ({
 
   updateJointExpense: async (id, changes) => {
     const joint = get().joint;
-    if (!joint) throw new Error('No joint account');
+    if (!joint) throw new Error('Join or create a joint account first.');
 
     // Update pending create payload in place
     const createItem = get().outbox.find(
@@ -737,7 +746,10 @@ export const useJointStore = create<JointStore>((set, get) => ({
           set({
             outbox,
             pendingCount: outbox.length,
-            error: err?.message || 'Sync pending — will retry',
+            error: userFacingError(
+              err,
+              'Some expenses are still syncing. We’ll retry automatically.',
+            ),
           });
           await persistOutbox(joint.id, outbox);
           break;

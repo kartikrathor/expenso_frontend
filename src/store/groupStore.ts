@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { apiRequest } from '../services/api';
+import { userFacingError } from '../utils/userFacingError';
 import { useAuthStore } from './authStore';
 
 export interface GroupSummary {
@@ -57,7 +58,10 @@ export const useGroupStore = create<GroupStore>((set, get) => ({
       const data = await apiRequest<{ groups: GroupSummary[] }>('/api/groups', { token });
       set({ groups: data.groups, isBusy: false });
     } catch (err: any) {
-      set({ isBusy: false, error: err?.message || 'Could not load groups' });
+      set({
+        isBusy: false,
+        error: userFacingError(err, 'Couldn’t load your groups. Please try again.'),
+      });
     }
   },
 
@@ -74,7 +78,10 @@ export const useGroupStore = create<GroupStore>((set, get) => ({
       set({ groups: [data.group, ...get().groups], isBusy: false });
       return data.group;
     } catch (err: any) {
-      set({ isBusy: false, error: err?.message || 'Could not create group' });
+      set({
+        isBusy: false,
+        error: userFacingError(err, 'Couldn’t create the group. Please try again.'),
+      });
       return null;
     }
   },
@@ -96,7 +103,10 @@ export const useGroupStore = create<GroupStore>((set, get) => ({
       });
       return data.group;
     } catch (err: any) {
-      set({ isBusy: false, error: err?.message || 'Could not join group' });
+      set({
+        isBusy: false,
+        error: userFacingError(err, 'Couldn’t join the group. Check the invite code and try again.'),
+      });
       return null;
     }
   },
@@ -113,7 +123,9 @@ export const useGroupStore = create<GroupStore>((set, get) => ({
         expensesByGroup: { ...get().expensesByGroup, [groupId]: data.expenses },
       });
     } catch (err: any) {
-      set({ error: err?.message || 'Could not load expenses' });
+      set({
+        error: userFacingError(err, 'Couldn’t load expenses. Please try again.'),
+      });
     }
   },
 
@@ -135,7 +147,10 @@ export const useGroupStore = create<GroupStore>((set, get) => ({
         isBusy: false,
       });
     } catch (err: any) {
-      set({ isBusy: false, error: err?.message || 'Could not add expense' });
+      set({
+        isBusy: false,
+        error: userFacingError(err, 'Couldn’t add the expense. Please try again.'),
+      });
       throw err;
     }
   },

@@ -74,7 +74,7 @@ export const useAppLockStore = create<AppLockStore>((set, get) => ({
     const userId = useAuthStore.getState().user?.id;
     if (!userId) return;
     if (enabled && !get().hasPin) {
-      throw new Error('Set a PIN first');
+      throw new Error('Set a 4–8 digit PIN first.');
     }
     await AsyncStorage.setItem(lockEnabledKey(userId), enabled ? '1' : '0');
     if (!enabled) {
@@ -90,7 +90,7 @@ export const useAppLockStore = create<AppLockStore>((set, get) => ({
     if (!userId) return;
     const cleaned = pin.replace(/\D/g, '');
     if (cleaned.length < 4 || cleaned.length > 8) {
-      throw new Error('PIN must be 4–8 digits');
+      throw new Error('PIN must be 4–8 digits.');
     }
     await AsyncStorage.setItem(lockPinKey(userId), cleaned);
     await AsyncStorage.setItem(lockEnabledKey(userId), '1');
@@ -101,10 +101,10 @@ export const useAppLockStore = create<AppLockStore>((set, get) => ({
     const userId = useAuthStore.getState().user?.id;
     if (!userId) return;
     if (enabled && !get().enabled) {
-      throw new Error('Turn on App lock first');
+      throw new Error('Turn on App lock first, then try again.');
     }
     if (enabled && !get().hasPin) {
-      throw new Error('Set a PIN first (used if biometric fails)');
+      throw new Error('Set a PIN first — it’s also used if fingerprint or Face ID fails.');
     }
     await AsyncStorage.setItem(lockBioKey(userId), enabled ? '1' : '0');
     set({ biometricEnabled: enabled });
@@ -128,7 +128,8 @@ export const useAppLockStore = create<AppLockStore>((set, get) => ({
   },
 
   beginBiometricPrompt: () => {
-    set({ suppressLockUntil: Date.now() + 20000 });
+    // Biometric sheet often pushes AppState to background on Android — suppress long enough.
+    set({ suppressLockUntil: Date.now() + 45000 });
   },
 
   lockNow: () => {

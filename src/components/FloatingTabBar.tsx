@@ -39,15 +39,16 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
     };
   }, []);
 
-  if (keyboardOpen) return null;
-
   return (
     <View
       style={[
         styles.wrapper,
-        { bottom: Math.max(insets.bottom, Platform.OS === 'android' ? 12 : 8) + FLOATING_TAB_MARGIN },
+        {
+          bottom: Math.max(insets.bottom, Platform.OS === 'android' ? 12 : 8) + FLOATING_TAB_MARGIN,
+          opacity: keyboardOpen ? 0 : 1,
+        },
       ]}
-      pointerEvents="box-none"
+      pointerEvents={keyboardOpen ? 'none' : 'box-none'}
     >
       <View
         style={[
@@ -89,7 +90,7 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
   );
 }
 
-function TabButton({
+const TabButton = React.memo(function TabButton({
   emoji,
   icon,
   label,
@@ -107,7 +108,7 @@ function TabButton({
   const scale = useSharedValue(1);
 
   React.useEffect(() => {
-    scale.value = withSpring(focused ? 1.05 : 1, { damping: 14, stiffness: 200 });
+    scale.value = withSpring(focused ? 1.05 : 1, { damping: 16, stiffness: 220 });
   }, [focused, scale]);
 
   const animStyle = useAnimatedStyle(() => ({
@@ -144,7 +145,7 @@ function TabButton({
       )}
     </Pressable>
   );
-}
+});
 
 const styles = StyleSheet.create({
   wrapper: {

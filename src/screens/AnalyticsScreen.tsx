@@ -3,41 +3,51 @@ import {
   View,
   Text,
   StyleSheet,
-  Pressable,
   ScrollView,
   Dimensions,
   RefreshControl,
 } from 'react-native';
-import Animated, { FadeInDown } from 'react-native-reanimated';
 import LinearGradient from 'react-native-linear-gradient';
 import { EmptyState } from '../components/EmptyState';
 import { ThemeToggle } from '../components/ThemeToggle';
+import { TimeFilterBar } from '../components/TimeFilterBar';
 import { StatsChartIcon } from '../components/icons/StatsChartIcon';
-import { getCategoryConfig } from '../constants/categories';
+import { getCategoryConfig, getCategoryColor } from '../constants/categories';
 import { formatCurrency, formatCompactCurrency } from '../utils/expenseParser';
 import { Spacing, Typography, Radius } from '../constants/theme';
 import { getTabBarBottomInset } from '../constants/layout';
 import { useTheme } from '../hooks/useTheme';
+import { useProStore } from '../store/proStore';
 import { useHouseholdExpenses } from '../hooks/useHouseholdExpenses';
 import { TimeFilter } from '../types/expense';
+import {
+  DateRange,
+  formatTimeFilterAnchor,
+  isCurrentPeriod,
+  TimeFilterOptions,
+} from '../utils/expenseAnalytics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PieChart, LineChart } from 'react-native-gifted-charts';
-
-const FILTERS: { key: TimeFilter; label: string }[] = [
-  { key: 'week', label: 'Week' },
-  { key: 'month', label: 'Month' },
-  { key: 'year', label: 'Year' },
-  { key: 'all', label: 'All' },
-];
+import { useIsFocused } from '@react-navigation/native';
+import { SilkFluidOverlay } from '../components/SilkFluidOverlay';
+import { SpiderWebBackground } from '../components/SpiderWebBackground';
+import { useThemeStore } from '../store/themeStore';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export function AnalyticsScreen() {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, gradientPoints, chartPalette } = useTheme();
+  const isPro = useProStore(s => s.isPro);
+  const openPaywall = useProStore(s => s.openPaywall);
   const bottomPad = getTabBarBottomInset(insets.bottom);
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const isFocused = useIsFocused();
+  const packId = useThemeStore(s => s.packId);
+  const spiderTheme = packId === 'red_web_spider';
   const [filter, setFilter] = useState<TimeFilter>('month');
+  const [anchor, setAnchor] = useState(() => new Date());
+  const [customRange, setCustomRange] = useState<DateRange | null>(null);
 
   const {
     isJoint,
@@ -52,41 +62,83 @@ export function AnalyticsScreen() {
     getFiltered,
   } = useHouseholdExpenses();
 
-  const total = useMemo(() => getTotal(filter), [getTotal, filter, expenses]);
+  const filterOpts: TimeFilterOptions = useMemo(
+    () => ({ filter, anchor, customRange }),
+    [filter, anchor, customRange],
+  );
+
+  const total = useMemo(() => getTotal(filterOpts), [getTotal, filterOpts, expenses]);
   const categories = useMemo(
-    () => getCategoryBreakdown(filter),
-    [getCategoryBreakdown, filter, expenses],
+    () => getCategoryBreakdown(filterOpts),
+    [getCategoryBreakdown, filterOpts, expenses],
   );
   const merchants = useMemo(
-    () => getMerchantBreakdown(filter),
-    [getMerchantBreakdown, filter, expenses],
+    () => getMerchantBreakdown(filterOpts),
+    [getMerchantBreakdown, filterOpts, expenses],
   );
-  const daily = useMemo(() => getDailySpending(filter), [getDailySpending, filter, expenses]);
-  const expenseCount = useMemo(() => getFiltered(filter).length, [getFiltered, filter, expenses]);
+  const daily = useMemo(
+    () => getDailySpending(filterOpts),
+    [getDailySpending, filterOpts, expenses],
+  );
+  const expenseCount = useMemo(
+    () => getFiltered(filterOpts).length,
+    [getFiltered, filterOpts, expenses],
+  );
   const hasData = expenseCount > 0;
   const budgetPct =
-    monthlyBudget > 0 && filter === 'month'
+    monthlyBudget > 0 && filter === 'month' && isCurrentPeriod('month', anchor)
       ? Math.min(999, Math.round((total / monthlyBudget) * 100))
       : null;
 
-  const pieData = categories.map(c => ({
-    value: c.amount,
-    color: c.color,
-  }));
+  const periodCaption = useMemo(() => {
+    if (filter === 'all' && customRange) {
+      return 'Custom range';
+    }
+    if (filter === 'all') return 'All time';
+    return formatTimeFilterAnchor(filter, anchor);
+  }, [filter, anchor, customRange]);
 
-  const lineData = daily.map((d, i) => ({
-    value: d.value,
-    label: i % Math.max(1, Math.ceil(daily.length / 5)) === 0 ? d.label : '',
-    dataPointColor: colors.primaryLight,
-    dataPointRadius: 3.5,
-    hideDataPoint: d.value <= 0,
-  }));
+  // Default = original category colors (Food pink, Groceries green, …). Custom palettes remint slices.
+  const pieData = useMemo(
+    () =>
+      categories.map((c, i) => ({
+        value: c.amount,
+        color:
+          chartPalette === 'default'
+            ? getCategoryColor(c.category)
+            : colors.chartColors[i % colors.chartColors.length] ?? getCategoryColor(c.category),
+      })),
+    [categories, chartPalette, colors.chartColors],
+  );
 
-  const maxMerchant = Math.max(...merchants.map(m => m.amount), 1);
-  const maxCategory = Math.max(...categories.map(c => c.amount), 1);
+  const lineData = useMemo(
+    () =>
+      daily.map((d, i) => ({
+        value: d.value,
+        label: i % Math.max(1, Math.ceil(daily.length / 5)) === 0 ? d.label : '',
+        dataPointColor: colors.primaryLight,
+        dataPointRadius: 3.5,
+        hideDataPoint: d.value <= 0,
+      })),
+    [daily, colors.primaryLight],
+  );
+
+  const maxMerchant = useMemo(
+    () => Math.max(...merchants.map(m => m.amount), 1),
+    [merchants],
+  );
+  const maxCategory = useMemo(
+    () => Math.max(...categories.map(c => c.amount), 1),
+    [categories],
+  );
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      {spiderTheme ? (
+        <View style={styles.screenWebs} pointerEvents="none">
+          <SpiderWebBackground opacity={0.2} />
+        </View>
+      ) : null}
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad }]}
@@ -99,7 +151,7 @@ export function AnalyticsScreen() {
           />
         }
       >
-        <Animated.View entering={FadeInDown.duration(220)} style={styles.titleRow}>
+            <View style={styles.titleRow}>
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>Insights</Text>
             <Text style={styles.subtitle}>
@@ -107,33 +159,18 @@ export function AnalyticsScreen() {
             </Text>
           </View>
           <ThemeToggle />
-        </Animated.View>
-
-        <View style={styles.filterRow}>
-          {FILTERS.map(f => {
-            const active = filter === f.key;
-            return (
-              <Pressable
-                key={f.key}
-                style={[styles.filterChip, active && styles.filterChipActive]}
-                onPress={() => setFilter(f.key)}
-              >
-                {active ? (
-                  <LinearGradient
-                    colors={[colors.gradientStart, colors.gradientEnd]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.filterGrad}
-                  >
-                    <Text style={styles.filterTextOn}>{f.label}</Text>
-                  </LinearGradient>
-                ) : (
-                  <Text style={styles.filterText}>{f.label}</Text>
-                )}
-              </Pressable>
-            );
-          })}
         </View>
+
+        <TimeFilterBar
+          filter={filter}
+          anchor={anchor}
+          customRange={customRange}
+          onFilterChange={setFilter}
+          onAnchorChange={setAnchor}
+          onCustomRangeChange={setCustomRange}
+          proNavEnabled={isPro}
+          onProGate={reason => openPaywall(reason)}
+        />
 
         {!hasData ? (
           <EmptyState
@@ -143,192 +180,221 @@ export function AnalyticsScreen() {
               </View>
             }
             title="No insights yet"
-            subtitle="Add a few expenses and your spending charts will show up here"
+            subtitle={
+              filter === 'all' && !customRange
+                ? 'Add a few expenses and your spending charts will show up here'
+                : `No expenses in ${periodCaption.toLowerCase()}. Try another period.`
+            }
           />
         ) : (
           <>
-            <Animated.View entering={FadeInDown.delay(40).duration(220)} style={styles.heroCard}>
+            <View style={styles.heroCard}>
               <LinearGradient
-                colors={[colors.gradientStart + '33', colors.surfaceElevated]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.heroGrad}
-              >
-                <Text style={styles.totalLabel}>
-                  {isJoint ? 'JOINT TOTAL' : 'TOTAL SPENT'}
-                </Text>
-                <Text style={styles.totalAmount}>{formatCurrency(total)}</Text>
-                <View style={styles.heroMeta}>
-                  <Text style={styles.totalSub}>{expenseCount} transactions</Text>
-                  {budgetPct != null && (
-                    <View
-                      style={[
-                        styles.budgetPill,
-                        {
-                          backgroundColor:
-                            budgetPct > 100 ? colors.danger + '22' : colors.primary + '22',
-                          borderColor:
-                            budgetPct > 100 ? colors.danger + '55' : colors.primary + '44',
-                        },
-                      ]}
-                    >
-                      <Text
+                colors={[colors.gradientStart + '55', colors.surfaceElevated]}
+                {...(gradientPoints
+                  ? { start: gradientPoints.start, end: gradientPoints.end }
+                  : { start: { x: 0, y: 0 }, end: { x: 1, y: 1 } })}
+                style={StyleSheet.absoluteFill}
+              />
+              {spiderTheme ? (
+                <SpiderWebBackground opacity={0.34} />
+              ) : (
+                <SilkFluidOverlay active={isFocused} fill={0.88} intensity="bold" />
+              )}
+              <View style={styles.heroContent}>
+                  <Text style={styles.totalLabel}>
+                    {isJoint ? 'JOINT TOTAL' : 'TOTAL SPENT'}
+                  </Text>
+                  <Text style={styles.periodCaption}>{periodCaption}</Text>
+                  <Text style={styles.totalAmount}>{formatCurrency(total)}</Text>
+                  <View style={styles.heroMeta}>
+                    <Text style={styles.totalSub}>{expenseCount} transactions</Text>
+                    {budgetPct != null && (
+                      <View
                         style={[
-                          styles.budgetPillText,
-                          { color: budgetPct > 100 ? colors.danger : colors.primaryLight },
+                          styles.budgetPill,
+                          {
+                            backgroundColor:
+                              budgetPct > 100 ? colors.danger + '22' : colors.primary + '22',
+                            borderColor:
+                              budgetPct > 100 ? colors.danger + '55' : colors.primary + '44',
+                          },
                         ]}
                       >
-                        {budgetPct}% of budget
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              </LinearGradient>
-            </Animated.View>
-
-            {pieData.length > 0 && (
-              <Animated.View entering={FadeInDown.delay(100).duration(220)} style={styles.chartCard}>
-                <Text style={styles.chartTitle}>By category</Text>
-                <View style={styles.pieRow}>
-                  <PieChart
-                    data={pieData}
-                    donut
-                    radius={82}
-                    innerRadius={54}
-                    innerCircleColor={colors.surface}
-                    strokeWidth={3}
-                    strokeColor={colors.surface}
-                    showText={false}
-                    focusOnPress
-                    centerLabelComponent={() => (
-                      <View style={styles.pieCenterWrap}>
-                        <Text style={styles.pieCenterValue}>{formatCompactCurrency(total)}</Text>
-                        <Text style={styles.pieCenterHint}>total</Text>
+                        <Text
+                          style={[
+                            styles.budgetPillText,
+                            { color: budgetPct > 100 ? colors.danger : colors.primaryLight },
+                          ]}
+                        >
+                          {budgetPct}% of budget
+                        </Text>
                       </View>
                     )}
-                  />
-                  <View style={styles.legend}>
-                    {categories.slice(0, 5).map(c => {
-                      const cfg = getCategoryConfig(c.category as any);
-                      const pct = total > 0 ? Math.round((c.amount / total) * 100) : 0;
-                      return (
-                        <View key={c.category} style={styles.legendItem}>
-                          <View style={[styles.legendDot, { backgroundColor: c.color }]} />
-                          <View style={styles.legendCopy}>
-                            <Text style={styles.legendLabel} numberOfLines={1}>
-                              {cfg.label}
-                            </Text>
-                            <View style={styles.legendBarTrack}>
-                              <View
-                                style={[
-                                  styles.legendBarFill,
-                                  {
-                                    width: `${Math.max(6, (c.amount / maxCategory) * 100)}%` as any,
-                                    backgroundColor: c.color,
-                                  },
-                                ]}
-                              />
+                  </View>
+              </View>
+            </View>
+
+            {pieData.length > 0 && (
+              <View style={styles.chartCard}>
+                {spiderTheme ? <SpiderWebBackground opacity={0.22} /> : null}
+                <View style={styles.cardContent}>
+                  <Text style={styles.chartTitle}>By category</Text>
+                  <View style={styles.pieRow}>
+                    <PieChart
+                      data={pieData}
+                      donut
+                      radius={82}
+                      innerRadius={54}
+                      innerCircleColor={colors.surface}
+                      strokeWidth={3}
+                      strokeColor={colors.surface}
+                      showText={false}
+                      focusOnPress
+                      centerLabelComponent={() => (
+                        <View style={styles.pieCenterWrap}>
+                          <Text style={styles.pieCenterValue}>{formatCompactCurrency(total)}</Text>
+                          <Text style={styles.pieCenterHint}>total</Text>
+                        </View>
+                      )}
+                    />
+                    <View style={styles.legend}>
+                      {categories.slice(0, 5).map((c, i) => {
+                        const cfg = getCategoryConfig(c.category as any);
+                        const pct = total > 0 ? Math.round((c.amount / total) * 100) : 0;
+                        const sliceColor =
+                          chartPalette === 'default'
+                            ? getCategoryColor(c.category)
+                            : colors.chartColors[i % colors.chartColors.length] ??
+                              getCategoryColor(c.category);
+                        return (
+                          <View key={c.category} style={styles.legendItem}>
+                            <View style={[styles.legendDot, { backgroundColor: sliceColor }]} />
+                            <View style={styles.legendCopy}>
+                              <Text style={styles.legendLabel} numberOfLines={1}>
+                                {cfg.label}
+                              </Text>
+                              <View style={styles.legendBarTrack}>
+                                <View
+                                  style={[
+                                    styles.legendBarFill,
+                                    {
+                                      width: `${Math.max(6, (c.amount / maxCategory) * 100)}%` as any,
+                                      backgroundColor: sliceColor,
+                                    },
+                                  ]}
+                                />
+                              </View>
+                            </View>
+                            <View style={styles.legendRight}>
+                              <Text style={styles.legendAmount}>{formatCompactCurrency(c.amount)}</Text>
+                              <Text style={styles.legendPct}>{pct}%</Text>
                             </View>
                           </View>
-                          <View style={styles.legendRight}>
-                            <Text style={styles.legendAmount}>{formatCompactCurrency(c.amount)}</Text>
-                            <Text style={styles.legendPct}>{pct}%</Text>
-                          </View>
-                        </View>
-                      );
-                    })}
+                        );
+                      })}
+                    </View>
                   </View>
                 </View>
-              </Animated.View>
+              </View>
             )}
 
             {lineData.length > 1 && (
-              <Animated.View entering={FadeInDown.delay(160).duration(220)} style={styles.chartCard}>
-                <Text style={styles.chartTitle}>Spending trend</Text>
-                <LineChart
-                  data={lineData}
-                  width={SCREEN_WIDTH - 72}
-                  height={168}
-                  spacing={Math.max(28, Math.min(48, (SCREEN_WIDTH - 100) / Math.max(lineData.length, 1)))}
-                  color={colors.primaryLight}
-                  thickness={2.5}
-                  startFillColor={colors.primary + '55'}
-                  endFillColor={colors.primary + '00'}
-                  startOpacity={0.35}
-                  endOpacity={0}
-                  areaChart
-                  curved
-                  hideRules
-                  hideYAxisText={false}
-                  yAxisColor="transparent"
-                  xAxisColor={colors.border}
-                  yAxisTextStyle={styles.axisText}
-                  xAxisLabelTextStyle={styles.axisText}
-                  rulesColor={colors.border}
-                  rulesType="solid"
-                  noOfSections={3}
-                  isAnimated
-                  animationDuration={700}
-                  initialSpacing={8}
-                  endSpacing={8}
-                />
-              </Animated.View>
+              <View style={styles.chartCard}>
+                {spiderTheme ? <SpiderWebBackground opacity={0.2} /> : null}
+                <View style={styles.cardContent}>
+                  <Text style={styles.chartTitle}>Spending trend</Text>
+                  <LineChart
+                    data={lineData}
+                    width={SCREEN_WIDTH - 72}
+                    height={168}
+                    spacing={Math.max(28, Math.min(48, (SCREEN_WIDTH - 100) / Math.max(lineData.length, 1)))}
+                    color={colors.primaryLight}
+                    thickness={2.5}
+                    startFillColor={colors.primary + '55'}
+                    endFillColor={colors.primary + '00'}
+                    startOpacity={0.35}
+                    endOpacity={0}
+                    areaChart
+                    curved
+                    hideRules
+                    hideYAxisText={false}
+                    yAxisColor="transparent"
+                    xAxisColor={colors.border}
+                    yAxisTextStyle={styles.axisText}
+                    xAxisLabelTextStyle={styles.axisText}
+                    rulesColor={colors.border}
+                    rulesType="solid"
+                    noOfSections={3}
+                    isAnimated={false}
+                    initialSpacing={8}
+                    endSpacing={8}
+                  />
+                </View>
+              </View>
             )}
 
             {merchants.length > 0 && (
-              <Animated.View entering={FadeInDown.delay(220).duration(220)} style={styles.chartCard}>
-                <Text style={styles.chartTitle}>Top merchants</Text>
-                <View style={styles.rankList}>
-                  {merchants.slice(0, 6).map((m, i) => (
-                    <View key={`${m.merchant}-${i}`} style={styles.rankRow}>
-                      <Text style={styles.rankIndex}>{i + 1}</Text>
-                      <View style={styles.rankBody}>
-                        <View style={styles.rankTop}>
-                          <Text style={styles.rankName} numberOfLines={1}>
-                            {m.merchant}
-                          </Text>
-                          <Text style={styles.rankAmount}>{formatCompactCurrency(m.amount)}</Text>
-                        </View>
-                        <View style={styles.rankTrack}>
-                          <LinearGradient
-                            colors={[colors.gradientStart, colors.gradientEnd]}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 0 }}
-                            style={[
-                              styles.rankFill,
-                              {
-                                width: `${Math.max(8, (m.amount / maxMerchant) * 100)}%` as any,
-                              },
-                            ]}
-                          />
+              <View style={styles.chartCard}>
+                {spiderTheme ? <SpiderWebBackground opacity={0.22} /> : null}
+                <View style={styles.cardContent}>
+                  <Text style={styles.chartTitle}>Top merchants</Text>
+                  <View style={styles.rankList}>
+                    {merchants.slice(0, 6).map((m, i) => (
+                      <View key={`${m.merchant}-${i}`} style={styles.rankRow}>
+                        <Text style={styles.rankIndex}>{i + 1}</Text>
+                        <View style={styles.rankBody}>
+                          <View style={styles.rankTop}>
+                            <Text style={styles.rankName} numberOfLines={1}>
+                              {m.merchant}
+                            </Text>
+                            <Text style={styles.rankAmount}>{formatCompactCurrency(m.amount)}</Text>
+                          </View>
+                          <View style={styles.rankTrack}>
+                            <LinearGradient
+                              colors={[colors.gradientStart, colors.gradientEnd]}
+                              {...(gradientPoints
+                                ? { start: gradientPoints.start, end: gradientPoints.end }
+                                : { start: { x: 0, y: 0 }, end: { x: 1, y: 0 } })}
+                              style={[
+                                styles.rankFill,
+                                {
+                                  width: `${Math.max(8, (m.amount / maxMerchant) * 100)}%` as any,
+                                },
+                              ]}
+                            />
+                          </View>
                         </View>
                       </View>
-                    </View>
-                  ))}
+                    ))}
+                  </View>
                 </View>
-              </Animated.View>
+              </View>
             )}
 
-            <Animated.View entering={FadeInDown.delay(280).duration(220)} style={styles.insightCard}>
-              <Text style={styles.insightEyebrow}>HIGHLIGHT</Text>
-              {categories[0] && (
-                <Text style={styles.insightText}>
-                  <Text style={styles.insightEm}>
-                    {getCategoryConfig(categories[0].category as any).label}
+            <View style={styles.insightCard}>
+              {spiderTheme ? <SpiderWebBackground opacity={0.18} /> : null}
+              <View style={styles.cardContent}>
+                <Text style={styles.insightEyebrow}>HIGHLIGHT</Text>
+                {categories[0] && (
+                  <Text style={styles.insightText}>
+                    <Text style={styles.insightEm}>
+                      {getCategoryConfig(categories[0].category as any).label}
+                    </Text>
+                    {' '}took the largest share (
+                    {Math.round((categories[0].amount / total) * 100)}%).
                   </Text>
-                  {' '}took the largest share (
-                  {Math.round((categories[0].amount / total) * 100)}%).
-                </Text>
-              )}
-              {merchants[0] && (
-                <Text style={[styles.insightText, { marginTop: 8 }]}>
-                  Top merchant:{' '}
-                  <Text style={styles.insightEm}>{merchants[0].merchant}</Text>
-                  {' · '}
-                  {formatCurrency(merchants[0].amount)}
-                </Text>
-              )}
-            </Animated.View>
+                )}
+                {merchants[0] && (
+                  <Text style={[styles.insightText, { marginTop: 8 }]}>
+                    Top merchant:{' '}
+                    <Text style={styles.insightEm}>{merchants[0].merchant}</Text>
+                    {' · '}
+                    {formatCurrency(merchants[0].amount)}
+                  </Text>
+                )}
+              </View>
+            </View>
           </>
         )}
       </ScrollView>
@@ -339,7 +405,10 @@ export function AnalyticsScreen() {
 function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    scroll: { padding: Spacing.lg },
+    screenWebs: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    scroll: { padding: Spacing.lg, zIndex: 1 },
     titleRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
@@ -349,34 +418,6 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     },
     title: { ...Typography.h1, color: colors.text },
     subtitle: { ...Typography.caption, color: colors.textSecondary, marginTop: 4 },
-    filterRow: {
-      flexDirection: 'row',
-      gap: Spacing.sm,
-      marginBottom: Spacing.lg,
-    },
-    filterChip: {
-      flex: 1,
-      borderRadius: Radius.full,
-      backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.border,
-      overflow: 'hidden',
-      minHeight: 36,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    filterChipActive: {
-      borderColor: 'transparent',
-      backgroundColor: 'transparent',
-    },
-    filterGrad: {
-      width: '100%',
-      paddingVertical: Spacing.sm,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    filterText: { ...Typography.caption, color: colors.textSecondary, fontWeight: '600' },
-    filterTextOn: { ...Typography.caption, color: '#FFF', fontWeight: '700' },
     emptyIcon: {
       width: 72,
       height: 72,
@@ -390,16 +431,31 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       marginBottom: Spacing.md,
       borderWidth: 1,
       borderColor: colors.border,
+      minHeight: 140,
+      position: 'relative',
+      backgroundColor: colors.surfaceElevated,
     },
     heroGrad: {
+      ...StyleSheet.absoluteFillObject,
+    },
+    heroContent: {
       padding: Spacing.lg,
       alignItems: 'center',
+      zIndex: 2,
+      minHeight: 140,
+      justifyContent: 'center',
     },
     totalLabel: {
       ...Typography.caption,
       color: colors.textSecondary,
       letterSpacing: 1.4,
       fontWeight: '700',
+    },
+    periodCaption: {
+      ...Typography.caption,
+      color: colors.primaryLight,
+      fontWeight: '700',
+      marginTop: 4,
     },
     totalAmount: {
       fontSize: 34,
@@ -427,10 +483,16 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     chartCard: {
       backgroundColor: colors.surface,
       borderRadius: Radius.xl,
-      padding: Spacing.lg,
       marginBottom: Spacing.md,
       borderWidth: 1,
       borderColor: colors.border,
+      overflow: 'hidden',
+      position: 'relative',
+      minHeight: 120,
+    },
+    cardContent: {
+      padding: Spacing.lg,
+      zIndex: 2,
     },
     chartTitle: {
       ...Typography.h2,
@@ -496,9 +558,11 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     insightCard: {
       backgroundColor: colors.primary + '12',
       borderRadius: Radius.xl,
-      padding: Spacing.lg,
       borderWidth: 1,
       borderColor: colors.primary + '28',
+      overflow: 'hidden',
+      position: 'relative',
+      minHeight: 96,
     },
     insightEyebrow: {
       ...Typography.small,

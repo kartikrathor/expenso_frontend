@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Match app Default / Ocean dark ("Electric Twilight") -->
+    <color name="widget_bg">#070B14</color>
+    <color name="widget_surface">#0F1623</color>
+    <color name="widget_elevated">#151D2E</color>
+    <color name="widget_highlight">#1C2638</color>
+    <color name="widget_text">#EEF2FF</color>
+    <color name="widget_muted">#64748B</color>
+    <color name="widget_secondary">#94A3B8</color>
+    <color name="widget_primary">#6366F1</color>
+    <color name="widget_primary_dark">#4338CA</color>
+    <color name="widget_accent">#06B6D4</color>
+    <color name="widget_accent_warm">#A855F7</color>
+    <color name="widget_border">#1E293B</color>
+    <color name="widget_button_text">#FFFFFF</color>
+    <!-- legacy aliases -->
+    <color name="widget_accent_dark">#4338CA</color>
+</resources>

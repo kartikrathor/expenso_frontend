@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Expense, CategoryId, MerchantId } from '../types/expense';
 import { DEFAULT_MERCHANT, getMerchantConfig } from '../constants/merchants';
 import { CATEGORIES, getCategoryConfig } from '../constants/categories';
+import { useCategoryStore } from '../store/categoryStore';
 import { useMerchantStore } from '../store/merchantStore';
 import { MerchantIcon } from './MerchantIcon';
 import { CategoryGlyph, CategoryIcon } from './CategoryIcon';
@@ -45,6 +46,8 @@ export function EditExpenseModal({ visible, expense, onClose, onSave }: EditExpe
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const merchantOptions = useMerchantStore(s => s.all);
+  const categoryOptions = useCategoryStore(s => (s.all.length ? s.all : CATEGORIES));
+  const loadCategories = useCategoryStore(s => s.loadCategories);
 
   const [amount, setAmount] = useState('');
   const [merchantLabel, setMerchantLabel] = useState('');
@@ -65,8 +68,9 @@ export function EditExpenseModal({ visible, expense, onClose, onSave }: EditExpe
       setNote(expense.note ?? '');
       setExpenseDate(expense.date || new Date().toISOString());
       setSaving(false);
+      loadCategories();
     }
-  }, [expense]);
+  }, [expense, loadCategories]);
 
   useEffect(() => {
     if (!visible) Keyboard.dismiss();
@@ -229,7 +233,7 @@ export function EditExpenseModal({ visible, expense, onClose, onSave }: EditExpe
               {/* Category picker */}
               <Text style={styles.label}>Category</Text>
               <View style={styles.categoryGrid}>
-                {CATEGORIES.map(c => (
+                {categoryOptions.map(c => (
                   <Pressable
                     key={c.id}
                     style={[
