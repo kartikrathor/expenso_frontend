@@ -63,7 +63,7 @@ export function Skeleton({
  * Feels intentional while auth / session / expenses hydrate.
  */
 export function AppBootSkeleton() {
-  const { colors, gradientPoints, isDark } = useTheme();
+  const { colors, gradientPoints, actionGradient, isDark } = useTheme();
   const styles = useMemo(() => splashStyles(colors), [colors]);
 
   const markScale = useSharedValue(0.86);
@@ -111,7 +111,7 @@ export function AppBootSkeleton() {
       <View style={styles.center}>
         <Animated.View style={[styles.markWrap, markStyle]}>
           <LinearGradient
-            colors={[colors.gradientStart, colors.gradientMid, colors.gradientEnd]}
+            colors={[...actionGradient]}
             {...(gradientPoints
               ? { start: gradientPoints.start, end: gradientPoints.end }
               : { start: { x: 0, y: 0 }, end: { x: 1, y: 1 } })}

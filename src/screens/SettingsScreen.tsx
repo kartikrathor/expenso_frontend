@@ -54,7 +54,7 @@ type RowProps = {
 };
 
 function SettingsRow({ title, subtitle, onPress, right, pro, danger }: RowProps) {
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => rowStyles(colors), [colors]);
   const content = (
     <>
@@ -84,7 +84,7 @@ function SettingsRow({ title, subtitle, onPress, right, pro, danger }: RowProps)
 
 export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
   const insets = useSafeAreaInsets();
-  const { colors, gradientPoints } = useTheme();
+  const { colors, gradientPoints, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { expenses, isJoint } = useHouseholdExpenses();
 
@@ -683,7 +683,7 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
 
               <View style={styles.themesFooter}>
                 <LinearGradient
-                  colors={[colors.gradientStart, colors.gradientEnd]}
+                  colors={[...actionGradient]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 0 }}
                   style={styles.themesBrowseBtn}

@@ -43,7 +43,7 @@ export function TimeFilterBar({
   proNavEnabled = true,
   onProGate,
 }: TimeFilterBarProps) {
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [openPicker, setOpenPicker] = useState<'from' | 'to' | null>(null);
 
@@ -73,7 +73,7 @@ export function TimeFilterBar({
             >
               {active ? (
                 <LinearGradient
-                  colors={[colors.gradientStart, colors.gradientEnd]}
+                  colors={[...actionGradient]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 0 }}
                   style={styles.filterGrad}

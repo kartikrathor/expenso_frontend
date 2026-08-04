@@ -43,7 +43,7 @@ interface EditExpenseModalProps {
 
 export function EditExpenseModal({ visible, expense, onClose, onSave }: EditExpenseModalProps) {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const merchantOptions = useMerchantStore(s => s.all);
   const categoryOptions = useCategoryStore(s => (s.all.length ? s.all : CATEGORIES));
@@ -257,7 +257,7 @@ export function EditExpenseModal({ visible, expense, onClose, onSave }: EditExpe
                 disabled={!amount || saving}
               >
                 <LinearGradient
-                  colors={[colors.gradientStart, colors.gradientEnd]}
+                  colors={[...actionGradient]}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 0 }}
                   style={styles.saveBtnGrad}

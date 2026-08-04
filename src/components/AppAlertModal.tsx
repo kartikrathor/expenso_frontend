@@ -34,7 +34,7 @@ export function AppAlertModal({
   buttons,
   onClose,
 }: AppAlertModalProps) {
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const actions: AppAlertButton[] =
@@ -69,7 +69,7 @@ export function AppAlertModal({
                     onPress={() => handlePress(btn)}
                   >
                     <LinearGradient
-                      colors={[colors.gradientStart, colors.gradientEnd]}
+                      colors={[...actionGradient]}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 0 }}
                       style={styles.btnGrad}

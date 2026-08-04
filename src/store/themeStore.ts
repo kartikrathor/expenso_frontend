@@ -157,6 +157,15 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   setPackId: async (packId, allowPro) => {
     if (!isPackFree(packId) && !allowPro) return false;
     await AsyncStorage.setItem(PACK_KEY, packId);
+    // Default pack = exact Smart AI "Electric Twilight" — don't leave soft/minimal wash on
+    if (packId === DEFAULT_PACK) {
+      await Promise.all([
+        AsyncStorage.setItem(GRADIENT_KEY, DEFAULT_GRADIENT),
+        AsyncStorage.setItem(CHART_KEY, DEFAULT_CHART),
+      ]);
+      set({ packId, gradientStyle: DEFAULT_GRADIENT, chartPalette: DEFAULT_CHART });
+      return true;
+    }
     set({ packId });
     return true;
   },

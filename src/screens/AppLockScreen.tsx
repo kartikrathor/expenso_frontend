@@ -20,7 +20,7 @@ import { AppAlertModal, AppAlertContent } from '../components/AppAlertModal';
 
 export function AppLockScreen() {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const name = useAuthStore(s => s.user?.name);
   const userId = useAuthStore(s => s.user?.id);
@@ -170,7 +170,7 @@ export function AppLockScreen() {
         disabled={busy || pin.length < 4}
       >
         <LinearGradient
-          colors={[colors.gradientStart, colors.gradientEnd]}
+          colors={[...actionGradient]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
           style={styles.btnGrad}

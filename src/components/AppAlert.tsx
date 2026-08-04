@@ -40,7 +40,7 @@ export function AppAlert({
   onDismiss,
   icon,
 }: AppAlertProps) {
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors, isDark), [colors, isDark]);
 
   const backdropOpacity = useSharedValue(0);
@@ -121,7 +121,7 @@ export function AppAlert({
             style={styles.cardInner}
           >
             <LinearGradient
-              colors={[colors.gradientStart, colors.gradientEnd]}
+              colors={[...actionGradient]}
               start={{ x: 0, y: 0.5 }}
               end={{ x: 1, y: 0.5 }}
               style={styles.topAccent}
@@ -173,7 +173,7 @@ export function AppAlert({
                 return (
                   <Pressable key={i} style={styles.btnWrap} onPress={handlePress}>
                     <LinearGradient
-                      colors={[colors.gradientStart, colors.gradientEnd]}
+                      colors={[...actionGradient]}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 0 }}
                       style={styles.btnGrad}

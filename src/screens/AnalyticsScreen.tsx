@@ -37,7 +37,7 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export function AnalyticsScreen() {
   const insets = useSafeAreaInsets();
-  const { colors, gradientPoints, chartPalette } = useTheme();
+  const { colors, gradientPoints, chartPalette, actionGradient } = useTheme();
   const isPro = useProStore(s => s.isPro);
   const openPaywall = useProStore(s => s.openPaywall);
   const bottomPad = getTabBarBottomInset(insets.bottom);
@@ -134,11 +134,6 @@ export function AnalyticsScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      {spiderTheme ? (
-        <View style={styles.screenWebs} pointerEvents="none">
-          <SpiderWebBackground opacity={0.2} />
-        </View>
-      ) : null}
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad }]}
@@ -197,7 +192,7 @@ export function AnalyticsScreen() {
                 style={StyleSheet.absoluteFill}
               />
               {spiderTheme ? (
-                <SpiderWebBackground opacity={0.34} />
+                <SpiderWebBackground variant="hero" opacity={0.34} />
               ) : (
                 <SilkFluidOverlay active={isFocused} fill={0.88} intensity="bold" />
               )}
@@ -237,7 +232,7 @@ export function AnalyticsScreen() {
 
             {pieData.length > 0 && (
               <View style={styles.chartCard}>
-                {spiderTheme ? <SpiderWebBackground opacity={0.22} /> : null}
+                {spiderTheme ? <SpiderWebBackground variant="category" opacity={0.24} /> : null}
                 <View style={styles.cardContent}>
                   <Text style={styles.chartTitle}>By category</Text>
                   <View style={styles.pieRow}>
@@ -301,7 +296,7 @@ export function AnalyticsScreen() {
 
             {lineData.length > 1 && (
               <View style={styles.chartCard}>
-                {spiderTheme ? <SpiderWebBackground opacity={0.2} /> : null}
+                {spiderTheme ? <SpiderWebBackground variant="trend" opacity={0.22} /> : null}
                 <View style={styles.cardContent}>
                   <Text style={styles.chartTitle}>Spending trend</Text>
                   <LineChart
@@ -336,7 +331,7 @@ export function AnalyticsScreen() {
 
             {merchants.length > 0 && (
               <View style={styles.chartCard}>
-                {spiderTheme ? <SpiderWebBackground opacity={0.22} /> : null}
+                {spiderTheme ? <SpiderWebBackground variant="merchants" opacity={0.26} /> : null}
                 <View style={styles.cardContent}>
                   <Text style={styles.chartTitle}>Top merchants</Text>
                   <View style={styles.rankList}>
@@ -352,7 +347,7 @@ export function AnalyticsScreen() {
                           </View>
                           <View style={styles.rankTrack}>
                             <LinearGradient
-                              colors={[colors.gradientStart, colors.gradientEnd]}
+                              colors={[...actionGradient]}
                               {...(gradientPoints
                                 ? { start: gradientPoints.start, end: gradientPoints.end }
                                 : { start: { x: 0, y: 0 }, end: { x: 1, y: 0 } })}
@@ -373,7 +368,7 @@ export function AnalyticsScreen() {
             )}
 
             <View style={styles.insightCard}>
-              {spiderTheme ? <SpiderWebBackground opacity={0.18} /> : null}
+              {spiderTheme ? <SpiderWebBackground variant="insight" opacity={0.2} /> : null}
               <View style={styles.cardContent}>
                 <Text style={styles.insightEyebrow}>HIGHLIGHT</Text>
                 {categories[0] && (
@@ -405,9 +400,6 @@ export function AnalyticsScreen() {
 function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    screenWebs: {
-      ...StyleSheet.absoluteFillObject,
-    },
     scroll: { padding: Spacing.lg, zIndex: 1 },
     titleRow: {
       flexDirection: 'row',

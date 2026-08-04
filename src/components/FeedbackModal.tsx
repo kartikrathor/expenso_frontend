@@ -34,7 +34,7 @@ const CATEGORIES: { id: string; label: string }[] = [
 
 export function FeedbackModal({ visible, onClose, onSent }: FeedbackModalProps) {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const token = useAuthStore(s => s.token);
 
@@ -154,7 +154,7 @@ export function FeedbackModal({ visible, onClose, onSent }: FeedbackModalProps) 
             disabled={busy}
           >
             <LinearGradient
-              colors={[colors.gradientStart, colors.gradientEnd]}
+              colors={[...actionGradient]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={styles.submitGrad}

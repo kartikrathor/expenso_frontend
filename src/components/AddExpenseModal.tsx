@@ -65,7 +65,7 @@ type Step = 'input' | 'confirm';
 
 export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalProps) {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { show: showAlert, alertNode } = useAppAlert();
   const [tab, setTab] = useState<Tab>('quick');
@@ -358,7 +358,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
 
         <Pressable style={styles.confirmBtn} onPress={confirmSave} disabled={saving}>
           <LinearGradient
-            colors={[colors.gradientStart, colors.gradientEnd]}
+            colors={[...actionGradient]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}
             style={styles.confirmBtnGrad}
@@ -441,7 +441,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                         >
                           {active ? (
                             <LinearGradient
-                              colors={[colors.gradientStart, colors.gradientEnd]}
+                              colors={[...actionGradient]}
                               start={{ x: 0, y: 0 }}
                               end={{ x: 1, y: 1 }}
                               style={styles.tabActiveGrad}
@@ -498,7 +498,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                             >
                               {active ? (
                                 <LinearGradient
-                                  colors={[colors.gradientStart, colors.gradientEnd]}
+                                  colors={[...actionGradient]}
                                   style={styles.quickChipActive}
                                 >
                                   <Text style={styles.quickChipTextOn}>₹{a}</Text>
@@ -538,7 +538,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                           disabled={!smartInput && !amount}
                         >
                           <LinearGradient
-                            colors={[colors.gradientStart, colors.gradientEnd]}
+                            colors={[...actionGradient]}
                             start={{ x: 0, y: 0 }}
                             end={{ x: 1, y: 0 }}
                             style={styles.saveBtnGrad}
@@ -731,7 +731,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
                         disabled={!amount}
                       >
                         <LinearGradient
-                          colors={[colors.gradientStart, colors.gradientEnd]}
+                          colors={[...actionGradient]}
                           start={{ x: 0, y: 0 }}
                           end={{ x: 1, y: 0 }}
                           style={styles.saveBtnGrad}

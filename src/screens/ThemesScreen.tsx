@@ -23,6 +23,8 @@ import { useTheme } from '../hooks/useTheme';
 import { useProStore } from '../store/proStore';
 import { AppAlertModal, AppAlertContent } from '../components/AppAlertModal';
 import { SilkFluidOverlay } from '../components/SilkFluidOverlay';
+import { SpiderWebBackground } from '../components/SpiderWebBackground';
+import { BlackSpiderMark } from '../components/BlackSpiderMark';
 
 type ThemesScreenProps = {
   visible: boolean;
@@ -43,6 +45,7 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
     setChartPalette,
     setGradientStyle,
     resetToDefaults,
+    actionGradient,
   } = useTheme();
   const isPro = useProStore(s => s.isPro);
   const openPaywall = useProStore(s => s.openPaywall);
@@ -133,6 +136,11 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
           },
         ]}
       >
+        {packId === 'red_web_spider' ? (
+          <View style={styles.pageWebs} pointerEvents="none">
+            <SpiderWebBackground variant="full" opacity={0.2} />
+          </View>
+        ) : null}
         <View style={styles.header}>
           <Pressable onPress={onBack} hitSlop={12}>
             <Text style={styles.back}>Back</Text>
@@ -144,10 +152,11 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
         <ScrollView
           contentContainerStyle={styles.scroll}
           showsVerticalScrollIndicator={false}
+          style={styles.scrollFlex}
         >
           <View style={styles.previewCard}>
             <LinearGradient
-              colors={[colors.gradientStart, colors.gradientMid, colors.gradientEnd]}
+              colors={[...actionGradient]}
               {...(gradientPoints
                 ? { start: gradientPoints.start, end: gradientPoints.end }
                 : { start: { x: 0, y: 0 }, end: { x: 1, y: 0 } })}
@@ -159,6 +168,15 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
               fill={0.9}
               intensity="bold"
             />
+            {packId === 'red_web_spider' ? (
+              <>
+                <SpiderWebBackground variant="hero" opacity={0.34} />
+                <BlackSpiderMark
+                  size={32}
+                  style={{ top: 10, right: 12 }}
+                />
+              </>
+            ) : null}
             <View style={styles.previewContent}>
               <Text style={styles.previewLabel}>LIVE PREVIEW</Text>
               <Text style={styles.previewAmount}>₹12,480</Text>
@@ -349,7 +367,7 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
             {!isPro ? (
               <Pressable style={styles.proBtn} onPress={() => openPaywall('analytics_nav')}>
                 <LinearGradient
-                  colors={[colors.gradientStart, colors.gradientEnd]}
+                  colors={[...actionGradient]}
                   {...(gradientPoints
                     ? { start: gradientPoints.start, end: gradientPoints.end }
                     : { start: { x: 0, y: 0 }, end: { x: 1, y: 0 } })}
@@ -378,6 +396,11 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
 function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
     root: { flex: 1 },
+    pageWebs: {
+      ...StyleSheet.absoluteFillObject,
+      zIndex: 0,
+    },
+    scrollFlex: { flex: 1, zIndex: 1 },
     header: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -386,6 +409,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       paddingVertical: Spacing.md,
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
+      zIndex: 1,
     },
     back: { ...Typography.bodyBold, color: colors.primaryLight, width: 56 },
     title: { ...Typography.h3, color: colors.text },

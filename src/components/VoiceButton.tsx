@@ -94,7 +94,7 @@ function StopIcon({ size = 28, color = '#FFF' }: { size?: number; color?: string
 }
 
 export function VoiceButton({ onResult, onListeningChange }: VoiceButtonProps) {
-  const { colors } = useTheme();
+  const { colors, packId, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { show: showAlert, alertNode } = useAppAlert();
   const [isListening, setIsListening] = useState(false);
@@ -280,10 +280,14 @@ export function VoiceButton({ onResult, onListeningChange }: VoiceButtonProps) {
               colors={
                 isListening
                   ? [colors.danger, '#E11D48']
-                  : [colors.gradientStart, colors.gradientEnd]
+                  : [...actionGradient]
               }
               start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
+              end={
+                packId === 'red_web_spider'
+                  ? { x: 1, y: 0 }
+                  : { x: 1, y: 1 }
+              }
               style={[styles.micButton, { shadowColor: isListening ? colors.danger : colors.primary }]}
             >
               {isListening ? <StopIcon /> : <MicIcon />}

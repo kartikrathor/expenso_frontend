@@ -15,6 +15,9 @@ import { useTheme } from '../hooks/useTheme';
 import { format, parseISO } from 'date-fns';
 import { useCategoryStore } from '../store/categoryStore';
 import { useSwipeEnabledSV } from '../hooks/useSwipeScrollLock';
+import { SpiderWebBackground } from './SpiderWebBackground';
+import { BlackSpiderMark, pickSpiderByIndex } from './BlackSpiderMark';
+import { useThemeStore } from '../store/themeStore';
 
 /** Approximate row height (card + margin) — useful for FlatList tuning. */
 export const EXPENSE_CARD_ROW_HEIGHT = 90;
@@ -26,6 +29,8 @@ interface ExpenseCardProps {
   onEdit?: (id: string) => void;
   /** When true, show only time (use under a day section heading). */
   timeOnly?: boolean;
+  /** Subtle spider-web corner (Log page / Red Web Spider theme only). */
+  webAccent?: boolean;
 }
 
 function EditIcon({ size = 20, color = '#FFF' }: { size?: number; color?: string }) {
@@ -84,17 +89,26 @@ function TrashIcon({ size = 22, color = '#FFF' }: { size?: number; color?: strin
 
 export const ExpenseCard = memo(function ExpenseCard({
   expense,
+  index = 0,
   onDelete,
   onEdit,
   timeOnly,
+  webAccent,
 }: ExpenseCardProps) {
   const { colors, isDark } = useTheme();
+  const packId = useThemeStore(s => s.packId);
   const styles = useMemo(() => createStyles(colors), [colors]);
   const swipeableRef = useRef<SwipeableMethods>(null);
   const swipeEnabled = useSwipeEnabledSV();
   const getCat = useCategoryStore(s => s.getConfig);
   const category = getCat(expense.category) || getCategoryConfig(expense.category);
   const showCategoryAvatar = !expense.merchant || expense.merchant === 'default';
+  const showSpider =
+    packId === 'red_web_spider' && pickSpiderByIndex(index, 3);
+  // Soft corner webs on spider cards (Home) and explicit webAccent (Log/History)
+  const showWeb =
+    packId === 'red_web_spider' && (!!webAccent || showSpider);
+  const webVariant = index % 2 === 0 ? 'logSoft' : 'logSoftAlt';
 
   const dateLabel = useMemo(() => {
     try {
@@ -185,6 +199,19 @@ export const ExpenseCard = memo(function ExpenseCard({
         onLongPress={onDelete ? handleDeletePress : undefined}
         delayLongPress={400}
       >
+        {showWeb ? (
+          <SpiderWebBackground variant={webVariant} opacity={0.26} />
+        ) : null}
+        {showSpider ? (
+          <BlackSpiderMark
+            size={28}
+            style={
+              index % 2 === 1
+                ? { bottom: 4, right: 8 }
+                : { top: 4, right: 8 }
+            }
+          />
+        ) : null}
         <View style={[styles.iconRing, { borderColor: category.color + '44' }]}>
           {showCategoryAvatar ? (
             <CategoryIcon categoryId={expense.category} size={46} />
@@ -223,9 +250,11 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       gap: Spacing.md,
       marginBottom: Spacing.sm,
       minHeight: EXPENSE_CARD_ROW_HEIGHT - Spacing.sm,
+      overflow: 'hidden',
+      position: 'relative',
     },
-    iconRing: { borderRadius: Radius.md, borderWidth: 1.5, padding: 2 },
-    content: { flex: 1 },
+    iconRing: { borderRadius: Radius.md, borderWidth: 1.5, padding: 2, zIndex: 1 },
+    content: { flex: 1, zIndex: 1 },
     row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     merchant: { ...Typography.bodyBold, color: colors.text, flex: 1, marginRight: Spacing.sm },
     amount: { ...Typography.bodyBold, color: colors.text, fontSize: 17 },

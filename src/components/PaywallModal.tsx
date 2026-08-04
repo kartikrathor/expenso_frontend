@@ -52,7 +52,7 @@ const REASON_COPY: Record<
 };
 
 export function PaywallModal() {
-  const { colors, gradientPoints } = useTheme();
+  const { colors, gradientPoints, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const paywall = useProStore(s => s.paywall);
   const catalog = useProStore(s => s.catalog);
@@ -105,7 +105,7 @@ export function PaywallModal() {
       <View style={styles.backdrop}>
         <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <LinearGradient
-            colors={[colors.gradientStart, colors.gradientMid, colors.gradientEnd]}
+            colors={[...actionGradient]}
             {...(gradientPoints
               ? { start: gradientPoints.start, end: gradientPoints.end }
               : { start: { x: 0, y: 0 }, end: { x: 1, y: 1 } })}
@@ -129,7 +129,7 @@ export function PaywallModal() {
                   onPress={() => run(() => subscribe('yearly'), 'yearly')}
                 >
                   <LinearGradient
-                    colors={[colors.gradientStart, colors.gradientEnd]}
+                    colors={[...actionGradient]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
                     style={styles.primaryGrad}
@@ -215,7 +215,7 @@ export function PaywallModal() {
                   }
                 >
                   <LinearGradient
-                    colors={[colors.gradientStart, colors.gradientEnd]}
+                    colors={[...actionGradient]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
                     style={styles.primaryGrad}

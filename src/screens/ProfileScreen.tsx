@@ -7,6 +7,7 @@ import {
   TextInput,
   Pressable,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import LinearGradient from 'react-native-linear-gradient';
@@ -28,7 +29,10 @@ import { AppAlertModal, AppAlertContent } from '../components/AppAlertModal';
 import { useNotificationNavStore } from '../store/notificationNavStore';
 import { userFacingError } from '../utils/userFacingError';
 import { SilkFluidOverlay } from '../components/SilkFluidOverlay';
+import { SpiderWebBackground } from '../components/SpiderWebBackground';
 import { useIsFocused } from '@react-navigation/native';
+
+const RED_SPIDER_AVATAR = require('../assets/red-web-spider-avatar.png');
 
 const KEEP_KEYS = new Set([
   '@expenso_auth_token',
@@ -38,10 +42,11 @@ const KEEP_KEYS = new Set([
 
 export function ProfileScreen() {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, packId, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const bottomPad = getTabBarBottomInset(insets.bottom);
   const isFocused = useIsFocused();
+  const spiderTheme = packId === 'red_web_spider';
 
   const user = useAuthStore(s => s.user);
   const clearAllData = useAuthStore(s => s.clearAllData);
@@ -281,11 +286,25 @@ export function ProfileScreen() {
         </View>
 
         <View style={styles.card}>
-          <SilkFluidOverlay active={isFocused} fill={0.75} intensity="bold" />
+          {spiderTheme ? (
+            <SpiderWebBackground variant="profile" opacity={0.24} />
+          ) : (
+            <SilkFluidOverlay active={isFocused} fill={0.75} intensity="bold" />
+          )}
           <View style={styles.profileRow}>
-            <View style={[styles.avatar, { backgroundColor: user.avatarColor }]}>
-              <Text style={styles.avatarText}>{user.name.charAt(0).toUpperCase()}</Text>
-            </View>
+            {spiderTheme ? (
+              <View style={[styles.avatar, styles.spiderAvatar]}>
+                <Image
+                  source={RED_SPIDER_AVATAR}
+                  style={styles.avatarImage}
+                  resizeMode="cover"
+                />
+              </View>
+            ) : (
+              <View style={[styles.avatar, { backgroundColor: user.avatarColor }]}>
+                <Text style={styles.avatarText}>{user.name.charAt(0).toUpperCase()}</Text>
+              </View>
+            )}
             <View style={styles.profileInfo}>
               <Text style={styles.profileName}>{user.name}</Text>
               <Text style={styles.profileEmail}>{user.email}</Text>
@@ -301,9 +320,13 @@ export function ProfileScreen() {
         >
           <View style={styles.settingsIconWrap}>
             <LinearGradient
-              colors={[colors.primary, colors.accent]}
+              colors={
+                packId === 'red_web_spider'
+                  ? [...actionGradient]
+                  : [colors.primary, colors.accent]
+              }
               start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
+              end={packId === 'red_web_spider' ? { x: 1, y: 0 } : { x: 1, y: 1 }}
               style={styles.settingsIconGrad}
             >
               <Text style={styles.settingsIcon}>⚙️</Text>
@@ -399,7 +422,7 @@ export function ProfileScreen() {
               disabled={busy}
             >
               <LinearGradient
-                colors={[colors.gradientStart, colors.gradientEnd]}
+                colors={[...actionGradient]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.primaryBtnGrad}
@@ -558,6 +581,16 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderRadius: 28,
       alignItems: 'center',
       justifyContent: 'center',
+      overflow: 'hidden',
+    },
+    spiderAvatar: {
+      backgroundColor: '#0B1220',
+      borderWidth: 1.5,
+      borderColor: colors.primary + '88',
+    },
+    avatarImage: {
+      width: 56,
+      height: 56,
     },
     avatarText: { fontSize: 24, fontWeight: '800', color: '#FFF' },
     profileInfo: { flex: 1 },

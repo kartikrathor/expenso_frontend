@@ -34,7 +34,7 @@ type ScreenMode = 'auth' | 'forgot' | 'resetTrack';
 
 export function AuthScreen() {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const scrollRef = useRef<ScrollView>(null);
 
@@ -263,7 +263,7 @@ export function AuthScreen() {
         >
           <View style={[styles.brand, keyboardOpen && styles.brandCompact]}>
             <LinearGradient
-              colors={[colors.gradientStart, colors.gradientEnd]}
+              colors={[...actionGradient]}
               style={[styles.logo, keyboardOpen && styles.logoCompact]}
             >
               <ExpensoMarkIcon size={keyboardOpen ? 28 : 40} color="#FFF" />
@@ -377,7 +377,7 @@ export function AuthScreen() {
                   disabled={isBusy}
                 >
                   <LinearGradient
-                    colors={[colors.gradientStart, colors.gradientEnd]}
+                    colors={[...actionGradient]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
                     style={styles.primaryBtnGrad}
@@ -456,7 +456,7 @@ export function AuthScreen() {
                   disabled={isBusy}
                 >
                   <LinearGradient
-                    colors={[colors.gradientStart, colors.gradientEnd]}
+                    colors={[...actionGradient]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
                     style={styles.primaryBtnGrad}
@@ -546,7 +546,7 @@ export function AuthScreen() {
                         disabled={isBusy}
                       >
                         <LinearGradient
-                          colors={[colors.gradientStart, colors.gradientEnd]}
+                          colors={[...actionGradient]}
                           start={{ x: 0, y: 0 }}
                           end={{ x: 1, y: 0 }}
                           style={styles.primaryBtnGrad}

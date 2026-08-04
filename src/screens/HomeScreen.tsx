@@ -63,7 +63,7 @@ function firstName(full?: string | null) {
 export function HomeScreen() {
   const insets = useSafeAreaInsets();
   const isFocused = useIsFocused();
-  const { colors, gradientPoints } = useTheme();
+  const { colors, gradientPoints, actionGradient } = useTheme();
   const bottomPad = getTabBarBottomInset(insets.bottom);
   const userName = useAuthStore(s => s.user?.name);
   const greetName = firstName(userName);
@@ -127,23 +127,23 @@ export function HomeScreen() {
     });
   }, [onRefresh]);
 
-  const recentList = useMemo(() => {
-    // Most stores already keep newest-first; only sort if needed
-    if (householdExpenses.length <= 1) return householdExpenses.slice(0, 40);
+  // List must follow the same time filter as hero totals (was showing unfiltered "recent")
+  const listData = useMemo(() => {
+    if (filtered.length <= 1) return filtered.slice(0, 40);
     let needsSort = false;
-    for (let i = 1; i < Math.min(householdExpenses.length, 8); i++) {
-      const a = Date.parse(householdExpenses[i - 1].date) || 0;
-      const b = Date.parse(householdExpenses[i].date) || 0;
+    for (let i = 1; i < Math.min(filtered.length, 8); i++) {
+      const a = Date.parse(filtered[i - 1].date) || 0;
+      const b = Date.parse(filtered[i].date) || 0;
       if (a < b) {
         needsSort = true;
         break;
       }
     }
-    if (!needsSort) return householdExpenses.slice(0, 40);
-    return [...householdExpenses]
+    if (!needsSort) return filtered.slice(0, 40);
+    return [...filtered]
       .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
       .slice(0, 40);
-  }, [householdExpenses]);
+  }, [filtered]);
 
   const waterFill = useMemo(() => {
     if (monthlyBudget <= 0) return 0.58;
@@ -307,9 +307,10 @@ export function HomeScreen() {
   ]);
 
   const renderItem = useCallback<ListRenderItem<Expense>>(
-    ({ item }) => (
+    ({ item, index }) => (
       <ExpenseCard
         expense={item}
+        index={index}
         onDelete={handleDelete}
         onEdit={requestEdit}
       />
@@ -323,20 +324,28 @@ export function HomeScreen() {
     <EmptyState
       icon={
         <LinearGradient
-          colors={[colors.gradientStart, colors.gradientEnd]}
+          colors={[...actionGradient]}
           style={styles.emptyIcon}
         >
           <AddExpenseHeroIcon size={48} color="#FFF" plusColor={colors.gradientStart} />
         </LinearGradient>
       }
-      title={isJoint ? 'Add a shared expense' : 'Add your first expense'}
+      title={
+        householdExpenses.length > 0
+          ? 'No expenses in this period'
+          : isJoint
+            ? 'Add a shared expense'
+            : 'Add your first expense'
+      }
       subtitle={
-        isJoint
-          ? 'Both partners can add here — it syncs for both of you'
-          : 'In the Quick tab, type "Blinkit 200" or speak via the mic'
+        householdExpenses.length > 0
+          ? 'Try Week, Month, Year, or All — or pull down to refresh'
+          : isJoint
+            ? 'Both partners can add here — it syncs for both of you'
+            : 'In the Quick tab, type "Blinkit 200" or speak via the mic'
       }
     />
-  ), [colors.gradientStart, colors.gradientEnd, styles.emptyIcon, isJoint]);
+  ), [actionGradient, styles.emptyIcon, isJoint, householdExpenses.length, colors.gradientStart]);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -359,7 +368,7 @@ export function HomeScreen() {
         {(scrollProps) => (
           <FlatList
             {...scrollProps}
-            data={recentList}
+            data={listData}
             keyExtractor={keyExtractor}
             renderItem={renderItem}
             getItemLayout={(_, index) => ({
@@ -414,7 +423,7 @@ export function HomeScreen() {
               }}
             >
               <LinearGradient
-                colors={[colors.gradientStart, colors.gradientEnd]}
+                colors={[...actionGradient]}
                 {...(gradientPoints
                   ? { start: gradientPoints.start, end: gradientPoints.end }
                   : {})}

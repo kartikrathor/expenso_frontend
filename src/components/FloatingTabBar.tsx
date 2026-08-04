@@ -12,6 +12,7 @@ import { useTheme } from '../hooks/useTheme';
 import { Radius, Spacing, Typography } from '../constants/theme';
 import { FLOATING_TAB_HEIGHT, FLOATING_TAB_MARGIN } from '../constants/layout';
 import { StatsChartIcon } from './icons/StatsChartIcon';
+import { getTabPillGradient, getActionGradientPoints } from '../constants/themePacks';
 
 const TABS = [
   { name: 'Home', emoji: '🏠', label: 'Home' },
@@ -23,7 +24,9 @@ const TABS = [
 
 export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
-  const { colors, isDark } = useTheme();
+  const { colors, isDark, packId, gradientStyle } = useTheme();
+  const pillGradient = getTabPillGradient(colors, packId);
+  const pillAxis = getActionGradientPoints(packId, gradientStyle);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
 
   useEffect(() => {
@@ -72,6 +75,8 @@ export function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
               label={tab.label}
               focused={focused}
               colors={colors}
+              pillGradient={pillGradient}
+              pillAxis={pillAxis}
               onPress={() => {
                 const event = navigation.emit({
                   type: 'tabPress',
@@ -96,6 +101,8 @@ const TabButton = React.memo(function TabButton({
   label,
   focused,
   colors,
+  pillGradient,
+  pillAxis,
   onPress,
 }: {
   emoji: string;
@@ -103,6 +110,8 @@ const TabButton = React.memo(function TabButton({
   label: string;
   focused: boolean;
   colors: ReturnType<typeof useTheme>['colors'];
+  pillGradient: readonly string[];
+  pillAxis: { start: { x: number; y: number }; end: { x: number; y: number } };
   onPress: () => void;
 }) {
   const scale = useSharedValue(1);
@@ -128,9 +137,9 @@ const TabButton = React.memo(function TabButton({
       {focused ? (
         <Animated.View style={[styles.activePill, animStyle]}>
           <LinearGradient
-            colors={[colors.gradientStart, colors.gradientMid]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
+            colors={[...pillGradient]}
+            start={pillAxis.start}
+            end={pillAxis.end}
             style={styles.activeGradient}
           >
             {glyph}

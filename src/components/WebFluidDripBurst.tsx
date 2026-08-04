@@ -22,7 +22,7 @@ type DropSpec = {
   tint: string;
 };
 
-const TINTS = ['#FFE4E6', '#E11D48', '#FCA5A5', '#E0F2FE', '#BE123C', '#FFFFFF'];
+const TINTS = ['#DC2626', '#E11D48', '#1E3A8A', '#E0F2FE', '#9F1239', '#FFFFFF'];
 
 function buildDrops(seed: number): DropSpec[] {
   // Deterministic-ish fan around the FAB so each burst feels organic

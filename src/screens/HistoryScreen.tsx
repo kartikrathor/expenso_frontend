@@ -27,6 +27,9 @@ import { formatCurrency } from '../utils/expenseParser';
 import { CategoryId, Expense } from '../types/expense';
 import { format, parseISO } from 'date-fns';
 import { SwipeScrollLockGate } from '../hooks/useSwipeScrollLock';
+import { SpiderWebBackground } from '../components/SpiderWebBackground';
+import { BlackSpiderMark, pickSpiderByIndex } from '../components/BlackSpiderMark';
+import { useThemeStore } from '../store/themeStore';
 import {
   HistoryPeriod,
   applyCalendarDay,
@@ -293,6 +296,7 @@ export function HistoryScreen() {
                 onDelete={requestDelete}
                 onEdit={requestEdit}
                 timeOnly
+                webAccent={index % 3 === 0}
               />
             </View>
           )}
@@ -326,9 +330,9 @@ export function HistoryScreen() {
               subtitle="Adds, edits, and deletes will show up here"
             />
           }
-          renderItem={({ item }) => (
+          renderItem={({ item, index }) => (
             <View style={styles.cardWrap}>
-              <ActivityRow item={item} styles={styles} />
+              <ActivityRow item={item} index={index} styles={styles} />
             </View>
           )}
         />
@@ -343,11 +347,16 @@ export function HistoryScreen() {
 
 function ActivityRow({
   item,
+  index = 0,
   styles,
 }: {
   item: ActivityItem;
+  index?: number;
   styles: ReturnType<typeof createStyles>;
 }) {
+  const packId = useThemeStore(s => s.packId);
+  const showWeb = packId === 'red_web_spider' && index % 3 === 0;
+  const showSpider = packId === 'red_web_spider' && pickSpiderByIndex(index, 3);
   const cat = getCategoryConfig(item.category);
   const badge =
     item.type === 'added'
@@ -358,6 +367,15 @@ function ActivityRow({
 
   return (
     <View style={styles.activityCard}>
+      {showWeb ? (
+        <SpiderWebBackground
+          variant={index % 2 === 0 ? 'logSoft' : 'logSoftAlt'}
+          opacity={0.22}
+        />
+      ) : null}
+      {showSpider ? (
+        <BlackSpiderMark size={26} style={{ top: 6, right: 8 }} />
+      ) : null}
       <View style={styles.activityTop}>
         <View style={[styles.badge, { backgroundColor: badge.color + '22' }]}>
           <Text style={[styles.badgeText, { color: badge.color }]}>{badge.label}</Text>
@@ -505,12 +523,14 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       padding: Spacing.md,
       borderWidth: 1,
       borderColor: colors.border,
+      overflow: 'hidden',
     },
     activityTop: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'center',
       marginBottom: Spacing.sm,
+      zIndex: 1,
     },
     badge: {
       paddingHorizontal: Spacing.sm,
@@ -519,10 +539,17 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     },
     badgeText: { ...Typography.small, fontWeight: '700' },
     activityTime: { ...Typography.small, color: colors.textMuted },
-    activityTitle: { ...Typography.body, color: colors.text, fontWeight: '600' },
-    activityAmount: { ...Typography.body, color: colors.text, marginTop: 2, fontWeight: '700', fontSize: 18 },
-    activityMeta: { ...Typography.caption, color: colors.textSecondary, marginTop: Spacing.xs },
-    activityNote: { ...Typography.caption, color: colors.textMuted, marginTop: Spacing.xs },
-    activityBy: { ...Typography.small, color: colors.textMuted, marginTop: Spacing.sm },
+    activityTitle: { ...Typography.body, color: colors.text, fontWeight: '600', zIndex: 1 },
+    activityAmount: {
+      ...Typography.body,
+      color: colors.text,
+      marginTop: 2,
+      fontWeight: '700',
+      fontSize: 18,
+      zIndex: 1,
+    },
+    activityMeta: { ...Typography.caption, color: colors.textSecondary, marginTop: Spacing.xs, zIndex: 1 },
+    activityNote: { ...Typography.caption, color: colors.textMuted, marginTop: Spacing.xs, zIndex: 1 },
+    activityBy: { ...Typography.small, color: colors.textMuted, marginTop: Spacing.sm, zIndex: 1 },
   });
 }

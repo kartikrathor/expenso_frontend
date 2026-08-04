@@ -820,7 +820,7 @@ const neon = packPair(
   },
 );
 
-/** Red Web Spider — crimson + navy, silk-fluid gradients (original, no IP marks) */
+/** Red Web Spider — crimson + navy (Spidey suit), same brand in light & dark */
 const redWebSpider = packPair(
   {
     background: '#FFF5F5',
@@ -841,40 +841,41 @@ const redWebSpider = packPair(
     textSecondary: '#7F1D1D',
     textMuted: '#A8A29E',
     border: '#FECACA',
-    // Silk fluid: deep crimson → cool pearl → soft navy sheen
-    gradientStart: '#9F1239',
-    gradientMid: '#E11D48',
-    gradientEnd: '#FCA5A5',
+    // Suit stripe: bright red → deep crimson → navy (buttons read Spidey)
+    gradientStart: '#E11D48',
+    gradientMid: '#9F1239',
+    gradientEnd: '#1E3A8A',
     gradientGlow: '#E0F2FE',
-    chartColors: ['#DC2626', '#1E3A8A', '#F87171', '#3B82F6', '#BE123C', '#64748B', '#F59E0B', '#0F766E'],
+    chartColors: ['#DC2626', '#1E3A8A', '#EF4444', '#3B82F6', '#BE123C', '#64748B', '#F59E0B', '#0F766E'],
     overlay: 'rgba(28, 25, 23, 0.42)',
   },
   {
-    background: '#0A0608',
-    surface: '#140C10',
-    surfaceElevated: '#1C1016',
-    surfaceHighlight: '#2A1218',
-    tabBar: 'rgba(20, 12, 16, 0.96)',
-    tabBarBorder: 'rgba(248, 113, 113, 0.28)',
-    primary: '#F87171',
-    primaryLight: '#FCA5A5',
-    primaryDark: '#EF4444',
-    accent: '#60A5FA',
-    accentWarm: '#FB7185',
-    success: '#4ADE80',
-    warning: '#FBBF24',
-    danger: '#FB7185',
-    text: '#FFF1F2',
+    // Dark = same Spidey palette on a navy-black suit, not pink-washed
+    background: '#070B14',
+    surface: '#0F1524',
+    surfaceElevated: '#151C2E',
+    surfaceHighlight: '#1E2740',
+    tabBar: 'rgba(15, 21, 36, 0.97)',
+    tabBarBorder: 'rgba(220, 38, 38, 0.32)',
+    primary: '#DC2626',
+    primaryLight: '#EF4444',
+    primaryDark: '#B91C1C',
+    accent: '#2563EB',
+    accentWarm: '#F87171',
+    success: '#22C55E',
+    warning: '#F59E0B',
+    danger: '#EF4444',
+    text: '#F8FAFC',
     textSecondary: '#FECACA',
-    textMuted: '#9F8A8E',
-    border: '#3F1D28',
-    // Viscous silk: midnight crimson → rose → pearlescent cool glow
-    gradientStart: '#7F1D1D',
-    gradientMid: '#BE123C',
-    gradientEnd: '#FDA4AF',
-    gradientGlow: '#BAE6FD',
-    chartColors: ['#F87171', '#60A5FA', '#FB7185', '#93C5FD', '#F43F5E', '#94A3B8', '#FBBF24', '#2DD4BF'],
-    overlay: 'rgba(10, 6, 8, 0.82)',
+    textMuted: '#94A3B8',
+    border: '#2A3350',
+    // Same red → crimson → navy button stripe
+    gradientStart: '#E11D48',
+    gradientMid: '#9F1239',
+    gradientEnd: '#1E3A8A',
+    gradientGlow: '#93C5FD',
+    chartColors: ['#DC2626', '#2563EB', '#EF4444', '#3B82F6', '#BE123C', '#94A3B8', '#F59E0B', '#14B8A6'],
+    overlay: 'rgba(7, 11, 20, 0.84)',
   },
 );
 
@@ -961,7 +962,10 @@ export function resolveAppColors(
   gradientStyle: GradientStyleId,
   chartPalette: ChartPaletteId,
 ): AppColors {
-  const base = applyGradientStyle(getPackColors(packId, mode), gradientStyle);
+  const pack = getPackColors(packId, mode);
+  // Spidey suit stripe must stay red → navy (don't let soft/minimal restyle wash it)
+  const base =
+    packId === 'red_web_spider' ? pack : applyGradientStyle(pack, gradientStyle);
   return {
     ...base,
     chartColors: getChartPaletteColors(chartPalette, base.chartColors),
@@ -984,6 +988,40 @@ export function getGradientPoints(style: GradientStyleId): {
   }
   // soft
   return { start: { x: 0, y: 0 }, end: { x: 1, y: 0 } };
+}
+
+/** CTA gradient stops — spider: red→crimson→navy; others: original 2-stop */
+export function getActionGradient(
+  colors: AppColors,
+  packId?: ThemePackId,
+): readonly [string, string, string] | readonly [string, string] {
+  if (packId === 'red_web_spider') {
+    return [colors.gradientStart, colors.gradientMid, colors.gradientEnd];
+  }
+  // Exact original Default / pack CTA look (start → end, no mid wash)
+  return [colors.gradientStart, colors.gradientEnd];
+}
+
+/** Tab pill / CTA axis — spider horizontal suit stripe; else pack style or original diagonal */
+export function getActionGradientPoints(
+  packId: ThemePackId,
+  style: GradientStyleId,
+): { start: { x: number; y: number }; end: { x: number; y: number } } {
+  if (packId === 'red_web_spider') {
+    return { start: { x: 0, y: 0 }, end: { x: 1, y: 0 } };
+  }
+  return getGradientPoints(style) ?? { start: { x: 0, y: 0 }, end: { x: 1, y: 1 } };
+}
+
+/** Original floating-tab active pill (start→mid diagonal); spider uses full suit stripe */
+export function getTabPillGradient(
+  colors: AppColors,
+  packId: ThemePackId,
+): readonly [string, string, string] | readonly [string, string] {
+  if (packId === 'red_web_spider') {
+    return [colors.gradientStart, colors.gradientMid, colors.gradientEnd];
+  }
+  return [colors.gradientStart, colors.gradientMid];
 }
 
 export function getThemePackMeta(id: ThemePackId): ThemePackMeta {

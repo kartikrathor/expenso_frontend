@@ -39,7 +39,7 @@ type Step = 'welcome' | 'add' | 'swipe';
 
 export function OnboardingScreen({ onDone }: OnboardingScreenProps) {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const [step, setStep] = useState<Step>('welcome');
@@ -160,7 +160,7 @@ export function OnboardingScreen({ onDone }: OnboardingScreenProps) {
       {/* Animated logo area */}
       <View style={styles.logoWrap}>
         <LinearGradient
-          colors={[colors.gradientStart, colors.gradientEnd]}
+          colors={[...actionGradient]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.logoCircle}
@@ -191,7 +191,7 @@ export function OnboardingScreen({ onDone }: OnboardingScreenProps) {
 
       <Pressable style={styles.primaryBtn} onPress={() => setStep('add')}>
         <LinearGradient
-          colors={[colors.gradientStart, colors.gradientEnd]}
+          colors={[...actionGradient]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
           style={styles.primaryBtnGrad}
@@ -205,7 +205,7 @@ export function OnboardingScreen({ onDone }: OnboardingScreenProps) {
   const renderAdd = () => (
     <Animated.View entering={FadeInDown.duration(380)} style={styles.stepWrap}>
       <View style={styles.stepIconWrap}>
-        <LinearGradient colors={[colors.gradientStart, colors.gradientEnd]} style={styles.stepIcon}>
+        <LinearGradient colors={[...actionGradient]} style={styles.stepIcon}>
           <AddExpenseHeroIcon size={42} color="#FFF" />
         </LinearGradient>
       </View>
@@ -220,7 +220,7 @@ export function OnboardingScreen({ onDone }: OnboardingScreenProps) {
 
       <Pressable style={[styles.primaryBtn, { marginTop: Spacing.xl }]} onPress={() => setShowAddModal(true)}>
         <LinearGradient
-          colors={[colors.gradientStart, colors.gradientEnd]}
+          colors={[...actionGradient]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
           style={styles.primaryBtnGrad}
@@ -322,7 +322,7 @@ export function OnboardingScreen({ onDone }: OnboardingScreenProps) {
 
       <Pressable style={[styles.primaryBtn, { marginTop: Spacing.lg }]} onPress={onDone}>
         <LinearGradient
-          colors={[colors.gradientStart, colors.gradientEnd]}
+          colors={[...actionGradient]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
           style={styles.primaryBtnGrad}

@@ -1,17 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { InteractionManager } from 'react-native';
 import { create } from 'zustand';
 import { Expense, MerchantId, TimeFilter, CategoryId } from '../types/expense';
 import {
-  startOfWeek,
-  startOfMonth,
-  startOfYear,
   parseISO,
-  startOfDay,
-  isWithinInterval,
   isToday,
 } from 'date-fns';
-import { sortByNewest } from '../utils/expenseAnalytics';
+import { filterExpenses, sortByNewest } from '../utils/expenseAnalytics';
 import { apiRequest } from '../services/api';
 import { useAuthStore } from './authStore';
 
@@ -83,16 +77,6 @@ const CATEGORY_COLORS: Record<string, string> = {
   other: '#94A3B8',
 };
 
-function getFilterDate(filter: TimeFilter): Date | null {
-  const now = new Date();
-  switch (filter) {
-    case 'week': return startOfWeek(now, { weekStartsOn: 1 });
-    case 'month': return startOfMonth(now);
-    case 'year': return startOfYear(now);
-    default: return null;
-  }
-}
-
 function authToken(): string | null {
   return useAuthStore.getState().token;
 }
@@ -119,24 +103,31 @@ function toExpense(raw: ServerExpense): Expense {
   };
 }
 
-let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPersist: { userId: string; expenses: Expense[]; budget: number } | null = null;
+/** Bumps on every loadForUser so stale network responses never overwrite a newer session. */
+let loadSeq = 0;
 
-/** Debounced + after-interactions write so add/edit doesn't hitch the UI thread. */
-function persistCache(userId: string | null, expenses: Expense[], budget: number) {
+async function writePersistJob(job: { userId: string; expenses: Expense[]; budget: number }) {
+  await AsyncStorage.setItem(expensesKey(job.userId), JSON.stringify(job.expenses));
+  await AsyncStorage.setItem(budgetKey(job.userId), String(job.budget));
+}
+
+/** Flush any pending cache write immediately (critical before logout / account switch). */
+async function flushPersistCache() {
+  const job = pendingPersist;
+  pendingPersist = null;
+  if (!job) return;
+  try {
+    await writePersistJob(job);
+  } catch {
+    /* ignore */
+  }
+}
+
+async function persistCacheNow(userId: string | null, expenses: Expense[], budget: number) {
   if (!userId) return;
   pendingPersist = { userId, expenses, budget };
-  if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = setTimeout(() => {
-    const job = pendingPersist;
-    pendingPersist = null;
-    persistTimer = null;
-    if (!job) return;
-    InteractionManager.runAfterInteractions(() => {
-      void AsyncStorage.setItem(expensesKey(job.userId), JSON.stringify(job.expenses));
-      void AsyncStorage.setItem(budgetKey(job.userId), String(job.budget));
-    });
-  }, 400);
+  await flushPersistCache();
 }
 
 async function readCache(userId: string): Promise<{ expenses: Expense[]; monthlyBudget: number }> {
@@ -201,6 +192,7 @@ async function collectLocalCandidates(userId: string): Promise<{
 
 /**
  * Automatically push any device-cached personal expenses that are not yet on the server.
+ * Only uploads local-only IDs (never re-POSTs a Mongo id that was deleted remotely).
  * Dedupes by amount + merchant + day + note so pull/refresh won't create duplicates.
  */
 async function syncLocalCacheToServer(userId: string, token: string): Promise<number> {
@@ -222,10 +214,19 @@ async function syncLocalCacheToServer(userId: string, token: string): Promise<nu
 
   for (const e of local.expenses) {
     if (uploaded.has(e.id)) continue;
+
+    // Already on server under this id
     if (!isLocalOnlyId(e.id) && remoteIds.has(e.id)) {
       uploaded.add(e.id);
       continue;
     }
+
+    // Mongo id missing remotely → deleted on server; never resurrect
+    if (!isLocalOnlyId(e.id)) {
+      uploaded.add(e.id);
+      continue;
+    }
+
     const fp = expenseFingerprint(e);
     if (remoteFps.has(fp)) {
       uploaded.add(e.id);
@@ -251,9 +252,8 @@ async function syncLocalCacheToServer(userId: string, token: string): Promise<nu
       uploadedCount += 1;
       await AsyncStorage.setItem(uploadedIdsKey(userId), JSON.stringify([...uploaded]));
     } catch {
-      // Retry on next login / refresh
+      // Retry on next login / refresh — keep going so one failure doesn't block others
       await AsyncStorage.setItem(uploadedIdsKey(userId), JSON.stringify([...uploaded]));
-      return uploadedCount;
     }
   }
 
@@ -295,7 +295,12 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
   },
 
   loadForUser: async (userId) => {
+    const seq = ++loadSeq;
+
     if (!userId) {
+      // Persist any debounced writes for the previous user before wiping memory
+      await flushPersistCache();
+      if (seq !== loadSeq) return;
       set({
         expenses: [],
         monthlyBudget: 0,
@@ -308,6 +313,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
 
     set({ isLoaded: false, activeUserId: userId });
     const localBundle = await collectLocalCandidates(userId);
+    if (seq !== loadSeq || get().activeUserId !== userId) return;
     set({
       expenses: sortByNewest(localBundle.expenses),
       monthlyBudget: localBundle.monthlyBudget,
@@ -322,19 +328,31 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     try {
       // Show cache first, then push any unsynced local/legacy rows, then pull server truth.
       await syncLocalCacheToServer(userId, token);
+      if (seq !== loadSeq || get().activeUserId !== userId) return;
 
       const [listRes, budgetRes] = await Promise.all([
         apiRequest<{ expenses: ServerExpense[] }>('/api/expenses', { token }),
         apiRequest<{ monthlyBudget: number }>('/api/expenses/budget', { token }),
       ]);
+      if (seq !== loadSeq || get().activeUserId !== userId) return;
 
-      const expenses = sortByNewest((listRes.expenses || []).map(toExpense));
+      const remoteList = sortByNewest((listRes.expenses || []).map(toExpense));
+      const remoteFps = new Set(remoteList.map(expenseFingerprint));
+      // Keep any still-local-only rows that failed to upload (don't wipe them on pull)
+      const orphans = (await collectLocalCandidates(userId)).expenses.filter(
+        e => isLocalOnlyId(e.id) && !remoteFps.has(expenseFingerprint(e)),
+      );
+      const expenses = orphans.length
+        ? sortByNewest([...orphans, ...remoteList])
+        : remoteList;
       const monthlyBudget = budgetRes.monthlyBudget ?? 0;
       set({ expenses, monthlyBudget, isSyncing: false });
-      await persistCache(userId, expenses, monthlyBudget);
+      await persistCacheNow(userId, expenses, monthlyBudget);
     } catch {
       // Keep cache if offline / server down
-      set({ isSyncing: false });
+      if (seq === loadSeq && get().activeUserId === userId) {
+        set({ isSyncing: false });
+      }
     }
   },
 
@@ -342,19 +360,31 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     const userId = get().activeUserId;
     const token = authToken();
     if (!userId || !token) return;
+    const seq = loadSeq;
     set({ isSyncing: true });
     try {
       await syncLocalCacheToServer(userId, token);
+      if (seq !== loadSeq || get().activeUserId !== userId) return;
       const [listRes, budgetRes] = await Promise.all([
         apiRequest<{ expenses: ServerExpense[] }>('/api/expenses', { token }),
         apiRequest<{ monthlyBudget: number }>('/api/expenses/budget', { token }),
       ]);
-      const expenses = sortByNewest((listRes.expenses || []).map(toExpense));
+      if (seq !== loadSeq || get().activeUserId !== userId) return;
+      const remoteList = sortByNewest((listRes.expenses || []).map(toExpense));
+      const remoteFps = new Set(remoteList.map(expenseFingerprint));
+      const orphans = (await collectLocalCandidates(userId)).expenses.filter(
+        e => isLocalOnlyId(e.id) && !remoteFps.has(expenseFingerprint(e)),
+      );
+      const expenses = orphans.length
+        ? sortByNewest([...orphans, ...remoteList])
+        : remoteList;
       const monthlyBudget = budgetRes.monthlyBudget ?? 0;
       set({ expenses, monthlyBudget, isSyncing: false });
-      await persistCache(userId, expenses, monthlyBudget);
+      await persistCacheNow(userId, expenses, monthlyBudget);
     } catch {
-      set({ isSyncing: false });
+      if (seq === loadSeq && get().activeUserId === userId) {
+        set({ isSyncing: false });
+      }
     }
   },
 
@@ -363,7 +393,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     const token = authToken();
     const current = [...get().expenses];
     set({ expenses: [] });
-    if (userId) await persistCache(userId, [], get().monthlyBudget);
+    if (userId) await persistCacheNow(userId, [], get().monthlyBudget);
     if (token) {
       for (const e of current) {
         try {
@@ -413,7 +443,8 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     const expense = toExpense(res.expense);
     const expenses = sortByNewest([expense, ...get().expenses]);
     set({ expenses });
-    await persistCache(userId, expenses, get().monthlyBudget);
+    // Write through immediately so logout right after add never loses the row
+    await persistCacheNow(userId, expenses, get().monthlyBudget);
     return expense;
   },
 
@@ -433,7 +464,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
       get().expenses.map(e => (e.id === id ? updated : e)),
     );
     set({ expenses });
-    await persistCache(userId, expenses, get().monthlyBudget);
+    await persistCacheNow(userId, expenses, get().monthlyBudget);
   },
 
   deleteExpense: async (id) => {
@@ -444,7 +475,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     await apiRequest(`/api/expenses/${id}`, { method: 'DELETE', token });
     const expenses = get().expenses.filter(e => e.id !== id);
     set({ expenses });
-    await persistCache(userId, expenses, get().monthlyBudget);
+    await persistCacheNow(userId, expenses, get().monthlyBudget);
   },
 
   deleteExpensesByYear: async (year) => {
@@ -479,15 +510,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     return victims.length;
   },
 
-  getFilteredExpenses: (filter) => {
-    const startDate = getFilterDate(filter);
-    if (!startDate) return get().expenses;
-    const now = new Date();
-    return get().expenses.filter(e => {
-      const expenseDate = startOfDay(parseISO(e.date));
-      return isWithinInterval(expenseDate, { start: startOfDay(startDate), end: now });
-    });
-  },
+  getFilteredExpenses: (filter) => filterExpenses(get().expenses, filter),
 
   getTotalSpent: (filter) => {
     return get().getFilteredExpenses(filter).reduce((sum, e) => sum + e.amount, 0);

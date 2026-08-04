@@ -83,7 +83,7 @@ function timeAgo(iso?: string) {
 
 export function SupportModal({ visible, onClose, onUnreadChange }: SupportModalProps) {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const token = useAuthStore(s => s.token);
 
@@ -412,7 +412,7 @@ export function SupportModal({ visible, onClose, onUnreadChange }: SupportModalP
               disabled={busy}
             >
               <LinearGradient
-                colors={[colors.gradientStart, colors.gradientEnd]}
+                colors={[...actionGradient]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.submitGrad}
@@ -506,7 +506,7 @@ export function SupportModal({ visible, onClose, onUnreadChange }: SupportModalP
                   disabled={busy || reply.trim().length < 2}
                 >
                   <LinearGradient
-                    colors={[colors.gradientStart, colors.gradientEnd]}
+                    colors={[...actionGradient]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
                     style={styles.submitGrad}

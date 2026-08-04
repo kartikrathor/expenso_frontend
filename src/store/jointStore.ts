@@ -6,14 +6,10 @@ import { useExpenseStore } from './expenseStore';
 import { CategoryId, Expense, MerchantId, TimeFilter } from '../types/expense';
 import { generateId } from '../utils/generateId';
 import { userFacingError } from '../utils/userFacingError';
+import { filterExpenses } from '../utils/expenseAnalytics';
 import {
   isToday,
-  isWithinInterval,
   parseISO,
-  startOfDay,
-  startOfMonth,
-  startOfWeek,
-  startOfYear,
 } from 'date-fns';
 
 export interface JointAccount {
@@ -244,18 +240,10 @@ function mergeExpenses(server: Expense[], current: Expense[], outbox: OutboxItem
   return sortNewest(Array.from(byId.values()));
 }
 
-function filterStart(filter: TimeFilter): Date | null {
-  const now = new Date();
-  switch (filter) {
-    case 'week': return startOfWeek(now, { weekStartsOn: 1 });
-    case 'month': return startOfMonth(now);
-    case 'year': return startOfYear(now);
-    default: return null;
-  }
-}
-
 let fetchSeq = 0;
 let flushing = false;
+/** Bumped on logout / account switch so in-flight flush/load never wipe disk or restore stale UI. */
+let sessionEpoch = 0;
 
 async function persistCache(groupId: string, expenses: Expense[]) {
   try {
@@ -303,6 +291,7 @@ export const useJointStore = create<JointStore>((set, get) => ({
 
   loadJoint: async () => {
     const token = authToken();
+    const epoch = sessionEpoch;
     if (!token) {
       set({ joint: null, groups: [], expenses: [], outbox: [], pendingCount: 0 });
       return;
@@ -313,6 +302,8 @@ export const useJointStore = create<JointStore>((set, get) => ({
         token,
         timeoutMs: 25000,
       });
+      if (sessionEpoch !== epoch || !authToken()) return;
+
       const groups = (data.groups || []).map(toJoint);
       const joint = groups[0] ?? null;
 
@@ -326,6 +317,8 @@ export const useJointStore = create<JointStore>((set, get) => ({
         readCache(joint.id),
         readOutbox(joint.id),
       ]);
+      if (sessionEpoch !== epoch || !authToken()) return;
+
       if (cached.length || outbox.length) {
         const merged = mergeExpenses(cached, cached, outbox);
         set({
@@ -341,9 +334,12 @@ export const useJointStore = create<JointStore>((set, get) => ({
       }
 
       await get().syncBudgetWithLocal();
+      if (sessionEpoch !== epoch) return;
       await get().flushOutbox();
+      if (sessionEpoch !== epoch) return;
       await get().loadJointExpenses();
     } catch (err: any) {
+      if (sessionEpoch !== epoch) return;
       // Never clear expenses on network failure
       set({
         isBusy: false,
@@ -528,6 +524,8 @@ export const useJointStore = create<JointStore>((set, get) => ({
     if (!token || !joint || groups.length === 0) return;
 
     const seq = ++fetchSeq;
+    const epoch = sessionEpoch;
+    const groupId = joint.id;
     try {
       const results = await Promise.all(
         groups.map(async g => {
@@ -543,8 +541,9 @@ export const useJointStore = create<JointStore>((set, get) => ({
         }),
       );
 
-      // Ignore stale responses
-      if (seq !== fetchSeq) return;
+      // Ignore stale responses / logout
+      if (seq !== fetchSeq || sessionEpoch !== epoch) return;
+      if (get().joint?.id !== groupId) return;
 
       const server = sortNewest(results.flat());
       const { expenses: current, outbox } = get();
@@ -556,10 +555,10 @@ export const useJointStore = create<JointStore>((set, get) => ({
       set({ expenses: merged, error: null });
       await persistCache(joint.id, primaryMerged);
     } catch (err: any) {
-      if (seq !== fetchSeq) return;
+      if (seq !== fetchSeq || sessionEpoch !== epoch) return;
       if (get().expenses.length === 0) {
         const cached = await readCache(joint.id);
-        if (cached.length) set({ expenses: cached });
+        if (cached.length && sessionEpoch === epoch) set({ expenses: cached });
       }
       set({
         error: userFacingError(err, 'Couldn’t load shared expenses. Please try again.'),
@@ -668,18 +667,25 @@ export const useJointStore = create<JointStore>((set, get) => ({
     const joint = get().joint;
     if (!token || !joint) return;
 
+    const epoch = sessionEpoch;
+    const groupId = joint.id;
     flushing = true;
     set({ isSyncing: true });
 
     try {
       while (get().outbox.length > 0) {
+        // Logout / account switch mid-flush: stop without writing empty outbox to disk
+        if (sessionEpoch !== epoch || get().joint?.id !== groupId || !authToken()) {
+          break;
+        }
+
         const item = get().outbox[0];
         if (!item) break;
 
         try {
           if (item.type === 'create') {
             const data = await apiRequest<{ expense: JointExpenseRaw }>(
-              `/api/groups/${joint.id}/expenses`,
+              `/api/groups/${groupId}/expenses`,
               {
                 method: 'POST',
                 token,
@@ -693,8 +699,26 @@ export const useJointStore = create<JointStore>((set, get) => ({
                 },
               },
             );
-            const saved = toExpense(data.expense, joint);
+            const jointNow = get().joint;
+            const saved = toExpense(
+              data.expense,
+              jointNow?.id === groupId
+                ? jointNow
+                : { id: groupId, name: '', emoji: '', inviteCode: '', memberCount: 0, monthlyBudget: 0 },
+            );
             if (item.payload.merchant) saved.merchant = item.payload.merchant;
+
+            // Always drop this outbox row on disk (even if session ended) to avoid re-POST duplicates
+            const diskOutbox = (await readOutbox(groupId)).filter(i => i.id !== item.id);
+            await persistOutbox(groupId, diskOutbox);
+            const diskCache = await readCache(groupId);
+            const nextCache = sortNewest([
+              saved,
+              ...diskCache.filter(e => e.id !== item.clientId && e.id !== saved.id),
+            ]);
+            await persistCache(groupId, nextCache);
+
+            if (sessionEpoch !== epoch || get().joint?.id !== groupId) break;
 
             // Bump fetchSeq so any in-flight list fetch can't overwrite this write
             fetchSeq += 1;
@@ -705,10 +729,8 @@ export const useJointStore = create<JointStore>((set, get) => ({
               ...get().expenses.filter(e => e.id !== item.clientId && e.id !== saved.id),
             ]);
             set({ outbox, expenses, pendingCount: outbox.length, error: null });
-            await persistCache(joint.id, expenses);
-            await persistOutbox(joint.id, outbox);
           } else if (item.type === 'update') {
-            await apiRequest(`/api/groups/${joint.id}/expenses/${item.expenseId}`, {
+            await apiRequest(`/api/groups/${groupId}/expenses/${item.expenseId}`, {
               method: 'PATCH',
               token,
               timeoutMs: 30000,
@@ -721,24 +743,27 @@ export const useJointStore = create<JointStore>((set, get) => ({
                 date: item.changes.date,
               },
             });
+            if (sessionEpoch !== epoch || get().joint?.id !== groupId) break;
             fetchSeq += 1;
             const outbox = get().outbox.filter(i => i.id !== item.id);
             set({ outbox, pendingCount: outbox.length, error: null });
-            await persistOutbox(joint.id, outbox);
-            await persistCache(joint.id, get().expenses);
+            await persistOutbox(groupId, outbox);
+            await persistCache(groupId, get().expenses);
           } else if (item.type === 'delete') {
-            await apiRequest(`/api/groups/${joint.id}/expenses/${item.expenseId}`, {
+            await apiRequest(`/api/groups/${groupId}/expenses/${item.expenseId}`, {
               method: 'DELETE',
               token,
               timeoutMs: 30000,
             });
+            if (sessionEpoch !== epoch || get().joint?.id !== groupId) break;
             fetchSeq += 1;
             const outbox = get().outbox.filter(i => i.id !== item.id);
             set({ outbox, pendingCount: outbox.length, error: null });
-            await persistOutbox(joint.id, outbox);
-            await persistCache(joint.id, get().expenses);
+            await persistOutbox(groupId, outbox);
+            await persistCache(groupId, get().expenses);
           }
         } catch (err: any) {
+          if (sessionEpoch !== epoch || get().joint?.id !== groupId) break;
           // Leave item in queue, bump attempts, stop for now (retry on next refresh)
           const outbox = get().outbox.map(i =>
             i.id === item.id ? { ...i, attempts: i.attempts + 1 } : i,
@@ -751,30 +776,19 @@ export const useJointStore = create<JointStore>((set, get) => ({
               'Some expenses are still syncing. We’ll retry automatically.',
             ),
           });
-          await persistOutbox(joint.id, outbox);
+          await persistOutbox(groupId, outbox);
           break;
         }
       }
     } finally {
       flushing = false;
-      set({ isSyncing: false });
+      if (sessionEpoch === epoch) {
+        set({ isSyncing: false });
+      }
     }
   },
 
-  getFiltered: filter => {
-    const start = filterStart(filter);
-    const list = get().expenses;
-    if (!start) return list;
-    const now = new Date();
-    return list.filter(e => {
-      try {
-        const d = startOfDay(parseISO(e.date));
-        return isWithinInterval(d, { start: startOfDay(start), end: now });
-      } catch {
-        return true;
-      }
-    });
-  },
+  getFiltered: filter => filterExpenses(get().expenses, filter),
 
   getTotal: filter => get().getFiltered(filter).reduce((s, e) => s + e.amount, 0),
 
@@ -792,6 +806,9 @@ export const useJointStore = create<JointStore>((set, get) => ({
   clearError: () => set({ error: null }),
 
   resetSession: async () => {
+    sessionEpoch += 1;
+    fetchSeq += 1;
+    flushing = false;
     set({
       joint: null,
       groups: [],

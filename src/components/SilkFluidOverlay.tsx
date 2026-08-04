@@ -14,6 +14,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useThemeStore } from '../store/themeStore';
+import { useTheme } from '../hooks/useTheme';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 
@@ -32,13 +33,23 @@ interface SilkFluidOverlayProps {
   intensity?: Intensity;
 }
 
-/** High-contrast pearlescent silk — not theme-gradient clones (those blend away). */
-const SILK = {
+/** High-contrast silk — crimson + navy (same Spidey brand light/dark). */
+const SILK_LIGHT = {
   deep: '#7F1D1D',
   mid: '#E11D48',
   surface: '#FFE4E6',
   pearl: '#E0F2FE',
   foam: '#F0F9FF',
+  navy: '#1E3A8A',
+};
+
+const SILK_DARK = {
+  deep: '#9F1239',
+  mid: '#DC2626',
+  surface: '#1E2740',
+  pearl: '#93C5FD',
+  foam: '#DBEAFE',
+  navy: '#2563EB',
 };
 
 /**
@@ -53,7 +64,9 @@ export function SilkFluidOverlay({
   intensity = 'medium',
 }: SilkFluidOverlayProps) {
   const packId = useThemeStore(s => s.packId);
+  const { isDark } = useTheme();
   const show = enabled ?? packId === 'red_web_spider';
+  const silk = isDark ? SILK_DARK : SILK_LIGHT;
   const uid = React.useId().replace(/:/g, '');
   const [size, setSize] = useState({ w: 0, h: 0 });
 
@@ -118,6 +131,7 @@ export function SilkFluidOverlay({
             height={tankH}
             phase={phase}
             opacities={opacities}
+            silk={silk}
           />
         ) : null}
       </Animated.View>
@@ -164,12 +178,14 @@ function SilkSvg({
   height,
   phase,
   opacities,
+  silk,
 }: {
   uid: string;
   width: number;
   height: number;
   phase: SharedValue<number>;
   opacities: (typeof INTENSITY)[Intensity];
+  silk: typeof SILK_LIGHT;
 }) {
   const W = width;
   const H = Math.max(height, 48);
@@ -254,18 +270,19 @@ function SilkSvg({
     <Svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={styles.svg} pointerEvents="none">
       <Defs>
         <SvgGradient id={`${uid}-body`} x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0" stopColor={SILK.surface} stopOpacity={String(opacities.bodyTop)} />
-          <Stop offset="0.4" stopColor={SILK.mid} stopOpacity={String(opacities.bodyMid)} />
-          <Stop offset="1" stopColor={SILK.deep} stopOpacity={String(opacities.bodyDeep)} />
+          <Stop offset="0" stopColor={silk.surface} stopOpacity={String(opacities.bodyTop)} />
+          <Stop offset="0.35" stopColor={silk.mid} stopOpacity={String(opacities.bodyMid)} />
+          <Stop offset="0.75" stopColor={silk.deep} stopOpacity={String(opacities.bodyDeep)} />
+          <Stop offset="1" stopColor={silk.navy} stopOpacity={String(opacities.bodyDeep)} />
         </SvgGradient>
         <SvgGradient id={`${uid}-back`} x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0" stopColor={SILK.pearl} stopOpacity={String(opacities.backTop)} />
-          <Stop offset="1" stopColor={SILK.deep} stopOpacity="0.55" />
+          <Stop offset="0" stopColor={silk.pearl} stopOpacity={String(opacities.backTop)} />
+          <Stop offset="1" stopColor={silk.navy} stopOpacity="0.55" />
         </SvgGradient>
         <SvgGradient id={`${uid}-pearl`} x1="0" y1="0" x2="1" y2="0">
-          <Stop offset="0" stopColor={SILK.pearl} stopOpacity="0" />
-          <Stop offset="0.5" stopColor={SILK.pearl} stopOpacity={String(opacities.pearl)} />
-          <Stop offset="1" stopColor={SILK.foam} stopOpacity="0" />
+          <Stop offset="0" stopColor={silk.pearl} stopOpacity="0" />
+          <Stop offset="0.5" stopColor={silk.pearl} stopOpacity={String(opacities.pearl)} />
+          <Stop offset="1" stopColor={silk.foam} stopOpacity="0" />
         </SvgGradient>
       </Defs>
 
@@ -316,7 +333,7 @@ function SilkSvg({
       />
       <AnimatedPath
         animatedProps={foamProps}
-        stroke={SILK.foam}
+        stroke={silk.foam}
         strokeOpacity={opacities.foam}
         strokeWidth={3.2}
         fill="none"

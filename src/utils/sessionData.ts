@@ -12,9 +12,13 @@ import { preloadAskChatHistory } from './askChatHistory';
  * Clear in-memory (+ user-scoped) session data when logging out
  * or switching accounts so the previous user's expenses never linger.
  */
+let bindEpoch = 0;
+
 export async function clearSessionStores() {
+  bindEpoch += 1;
+  // Expenses first: flushes debounced personal cache before wiping memory
+  await useExpenseStore.getState().loadForUser(null);
   await Promise.all([
-    useExpenseStore.getState().loadForUser(null),
     useActivityStore.getState().loadForUser(null),
     useJointStore.getState().resetSession(),
     useNotificationInboxStore.getState().loadForUser(null),
@@ -29,12 +33,14 @@ export async function clearSessionStores() {
  * Expenses load first (UI needs them); the rest run in parallel.
  */
 export async function bindSessionToUser(userId: string | null) {
+  const epoch = ++bindEpoch;
   if (!userId) {
     await clearSessionStores();
     return;
   }
   // Critical path: personal expenses cache → first paint
   await useExpenseStore.getState().loadForUser(userId);
+  if (epoch !== bindEpoch) return;
   // Parallel: everything else
   await Promise.all([
     useActivityStore.getState().loadForUser(userId),
@@ -42,5 +48,6 @@ export async function bindSessionToUser(userId: string | null) {
     useCategoryStore.getState().loadCategories(),
     useMerchantStore.getState().loadMerchants(),
   ]);
+  if (epoch !== bindEpoch) return;
   void preloadAskChatHistory(userId);
 }

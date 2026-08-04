@@ -15,14 +15,14 @@ interface StatCardProps {
 }
 
 export function StatCard({ label, amount, subtitle, index = 0, variant = 'default' }: StatCardProps) {
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   if (variant === 'primary') {
     return (
       <Animated.View entering={FadeInDown.delay(index * 100).springify()} style={styles.primaryWrapper}>
         <LinearGradient
-          colors={[colors.gradientStart, colors.gradientMid, colors.gradientEnd]}
+          colors={[...actionGradient]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.primaryCard}

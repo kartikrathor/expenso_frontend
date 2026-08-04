@@ -1,6 +1,10 @@
 import { useMemo } from 'react';
 import { getColors } from '../constants/themes';
-import { getGradientPoints } from '../constants/themePacks';
+import {
+  getActionGradient,
+  getActionGradientPoints,
+  getGradientPoints,
+} from '../constants/themePacks';
 import { useThemeStore } from '../store/themeStore';
 
 /**
@@ -20,7 +24,18 @@ export function useTheme() {
     [mode, packId, gradientStyle, chartPalette],
   );
 
-  const gradientPoints = useMemo(() => getGradientPoints(gradientStyle), [gradientStyle]);
+  const gradientPoints = useMemo(() => {
+    // Spidey suit stripe is always left→right red→navy on CTAs
+    if (packId === 'red_web_spider') {
+      return getActionGradientPoints(packId, gradientStyle);
+    }
+    return getGradientPoints(gradientStyle);
+  }, [packId, gradientStyle]);
+
+  const actionGradient = useMemo(
+    () => getActionGradient(colors, packId),
+    [colors, packId],
+  );
 
   return {
     colors,
@@ -30,6 +45,8 @@ export function useTheme() {
     chartPalette,
     gradientStyle,
     gradientPoints,
+    /** Pack-aware CTA stops (2-stop default, 3-stop spider) */
+    actionGradient,
     isDark: mode === 'dark',
     toggleTheme: useThemeStore.getState().toggleTheme,
     setTheme: useThemeStore.getState().setTheme,

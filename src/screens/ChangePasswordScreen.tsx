@@ -18,7 +18,7 @@ import { useAuthStore } from '../store/authStore';
 /** Forced after support issues a temporary password. */
 export function ChangePasswordScreen() {
   const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
+  const { colors, actionGradient } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const changePassword = useAuthStore(s => s.changePassword);
   const isBusy = useAuthStore(s => s.isBusy);
@@ -103,7 +103,7 @@ export function ChangePasswordScreen() {
           disabled={isBusy}
         >
           <LinearGradient
-            colors={[colors.gradientStart, colors.gradientEnd]}
+            colors={[...actionGradient]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 0 }}
             style={styles.primaryBtnGrad}
