@@ -52,6 +52,13 @@ type PaywallState = {
   themePackId?: string;
 };
 
+export type ProEntitlement = {
+  isPro: boolean;
+  plan: 'monthly' | 'yearly' | null;
+  expiresAt: string | null;
+  ownedThemePacks: string[];
+};
+
 interface ProStore {
   isPro: boolean;
   plan: 'monthly' | 'yearly' | null;
@@ -62,6 +69,9 @@ interface ProStore {
   isLoaded: boolean;
   paywall: PaywallState;
   loadPro: () => Promise<void>;
+  /** Apply Pro from login /auth/me — avoids race before /api/pro/me */
+  applyEntitlement: (entitlement: Partial<ProEntitlement> | null | undefined) => Promise<void>;
+  clearEntitlement: () => Promise<void>;
   refreshEntitlement: () => Promise<void>;
   openPaywall: (reason: PaywallReason, themePackId?: string) => void;
   closePaywall: () => void;
@@ -72,13 +82,21 @@ interface ProStore {
   canUseThemePack: (packId: string) => boolean;
 }
 
-async function cacheEntitlement(payload: {
-  isPro: boolean;
-  plan: 'monthly' | 'yearly' | null;
-  expiresAt: string | null;
-  ownedThemePacks: string[];
-}) {
+async function cacheEntitlement(payload: ProEntitlement) {
   await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+}
+
+function normalizeEntitlement(
+  entitlement: Partial<ProEntitlement> | null | undefined,
+): ProEntitlement {
+  return {
+    isPro: !!entitlement?.isPro,
+    plan: entitlement?.plan === 'monthly' || entitlement?.plan === 'yearly' ? entitlement.plan : null,
+    expiresAt: entitlement?.expiresAt || null,
+    ownedThemePacks: Array.isArray(entitlement?.ownedThemePacks)
+      ? entitlement!.ownedThemePacks!
+      : [],
+  };
 }
 
 function skusFromCatalog(catalog: ProCatalog | null) {
@@ -109,12 +127,7 @@ export const useProStore = create<ProStore>((set, get) => ({
       const cached = await AsyncStorage.getItem(CACHE_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
-        set({
-          isPro: !!parsed.isPro,
-          plan: parsed.plan || null,
-          expiresAt: parsed.expiresAt || null,
-          ownedThemePacks: parsed.ownedThemePacks || [],
-        });
+        set(normalizeEntitlement(parsed));
       }
     } catch {
       // ignore cache
@@ -133,50 +146,56 @@ export const useProStore = create<ProStore>((set, get) => ({
       // offline — keep defaults
     }
 
-    await get().refreshEntitlement();
+    // Entitlement refresh waits for auth (App.tsx + login applyEntitlement).
+    // Calling /api/pro/me here races loadAuth and used to wipe Pro to false.
     set({ isLoaded: true });
+  },
+
+  applyEntitlement: async entitlement => {
+    const next = normalizeEntitlement(entitlement);
+    set(next);
+    await cacheEntitlement(next);
+    if (next.isPro) {
+      set({ paywall: { visible: false, reason: get().paywall.reason } });
+    }
+  },
+
+  clearEntitlement: async () => {
+    const next = normalizeEntitlement(null);
+    set({
+      ...next,
+      paywall: { visible: false, reason: get().paywall.reason },
+    });
+    await cacheEntitlement(next);
   },
 
   refreshEntitlement: async () => {
     const token = useAuthStore.getState().token;
     if (!token) {
+      // Logged out — clear memory only. Disk wipe is clearEntitlement on logout
+      // so a boot race with loadAuth doesn't persist isPro:false over a Pro user.
       set({
         isPro: false,
         plan: null,
         expiresAt: null,
         ownedThemePacks: [],
-      });
-      await cacheEntitlement({
-        isPro: false,
-        plan: null,
-        expiresAt: null,
-        ownedThemePacks: [],
+        paywall: { visible: false, reason: get().paywall.reason },
       });
       return;
     }
     try {
       const data = await apiRequest<{
-        entitlement: {
-          isPro: boolean;
-          plan: 'monthly' | 'yearly' | null;
-          expiresAt: string | null;
-          ownedThemePacks: string[];
-        };
+        entitlement: ProEntitlement;
       }>('/api/pro/me', { token });
-      const next = {
-        isPro: !!data.entitlement.isPro,
-        plan: data.entitlement.plan,
-        expiresAt: data.entitlement.expiresAt,
-        ownedThemePacks: data.entitlement.ownedThemePacks || [],
-      };
-      set(next);
-      await cacheEntitlement(next);
+      await get().applyEntitlement(data.entitlement);
     } catch {
       // keep cache
     }
   },
 
   openPaywall: (reason, themePackId) => {
+    // Already Pro — never show upgrade / theme paywalls
+    if (get().isPro) return;
     set({ paywall: { visible: true, reason, themePackId } });
   },
 

@@ -17,6 +17,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import java.util.UUID
 import java.util.concurrent.Executors
 
 /**
@@ -37,6 +38,8 @@ class QuickAddExpenseActivity : Activity() {
   private var listening = false
   private var inputMethod = "manual"
   private var saving = false
+  private var pendingClientId: String? = null
+  private var pendingRequestText: String? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -216,6 +219,15 @@ class QuickAddExpenseActivity : Activity() {
 
     val groupId = ExpenseWidgetSession.groupId(this)
     val method = inputMethod
+    val clientId =
+      if (pendingRequestText == text && pendingClientId != null) {
+        pendingClientId!!
+      } else {
+        "widget_${UUID.randomUUID()}".also {
+          pendingClientId = it
+          pendingRequestText = text
+        }
+      }
     io.execute {
       val result =
         ExpenseApiHelper.createExpense(
@@ -224,6 +236,7 @@ class QuickAddExpenseActivity : Activity() {
           groupId,
           parsed,
           method,
+          clientId,
         )
       mainHandler.post {
         saving = false
@@ -234,6 +247,8 @@ class QuickAddExpenseActivity : Activity() {
           Toast.makeText(this, result.message, Toast.LENGTH_LONG).show()
           return@post
         }
+        pendingClientId = null
+        pendingRequestText = null
         ExpenseWidgetSession.prependRecent(this, result.row)
         val updatedToday = ExpenseWidgetSession.todayTotal(this) + result.row.amount
         ExpenseWidgetSession.saveTodayTotal(this, updatedToday)

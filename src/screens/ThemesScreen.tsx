@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   ScrollView,
   Pressable,
   Modal,
+  Image,
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,8 +20,11 @@ import {
   ChartPaletteId,
   GradientStyleId,
 } from '../constants/themePacks';
+import { APP_ICON_PREVIEWS } from '../constants/appIcons';
+import { closeAppForIconRefresh } from '../native/appIcon';
 import { useTheme } from '../hooks/useTheme';
 import { useProStore } from '../store/proStore';
+import { useAppIconStore } from '../store/appIconStore';
 import { AppAlertModal, AppAlertContent } from '../components/AppAlertModal';
 import { SilkFluidOverlay } from '../components/SilkFluidOverlay';
 import { SpiderWebBackground } from '../components/SpiderWebBackground';
@@ -50,8 +54,59 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
   const isPro = useProStore(s => s.isPro);
   const openPaywall = useProStore(s => s.openPaywall);
   const canUseThemePack = useProStore(s => s.canUseThemePack);
+  const iconPackId = useAppIconStore(s => s.iconPackId);
+  const iconSupported = useAppIconStore(s => s.supported);
+  const loadAppIcon = useAppIconStore(s => s.load);
+  const setIconForPack = useAppIconStore(s => s.setIconForPack);
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [alert, setAlert] = useState<AppAlertContent | null>(null);
+
+  useEffect(() => {
+    if (visible) void loadAppIcon();
+  }, [visible, loadAppIcon]);
+
+  const applyIconAndRestart = useCallback(
+    async (id: ThemePackId, beforeApply?: () => Promise<void>) => {
+      const prev = useAppIconStore.getState().iconPackId;
+      if (prev === id) return true;
+
+      // Ask before touching the launcher alias. Changing the alias first can
+      // interrupt the Android activity before React Native renders this modal.
+      setAlert({
+        icon: '⚠️',
+        title: 'Change app icon?',
+        message:
+          'Naya icon lagane ke liye app close hogi. Change ke baad home screen se Expenso dubara open karein.',
+        buttons: [
+          { label: 'Cancel', variant: 'secondary' },
+          {
+            label: 'Change & close',
+            variant: 'primary',
+            onPress: () => {
+              void (async () => {
+                await beforeApply?.();
+                const ok = await setIconForPack(id);
+                if (!ok) {
+                  setAlert({
+                    icon: '⚠️',
+                    title: iconSupported ? 'Couldn’t change icon' : 'Rebuild required',
+                    message: iconSupported
+                      ? 'Could not switch the launcher icon on this device.'
+                      : 'Native icon module is missing. Rebuild the Android app and try again.',
+                    buttons: [{ label: 'OK', variant: 'primary' }],
+                  });
+                  return;
+                }
+                await closeAppForIconRefresh();
+              })();
+            },
+          },
+        ],
+      });
+      return true;
+    },
+    [setIconForPack, iconSupported],
+  );
 
   const onBack = useCallback(async () => {
     if (packId !== 'ocean' && !canUseThemePack(packId)) {
@@ -63,11 +118,22 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
 
   const onPickPack = useCallback(
     async (id: ThemePackId) => {
-      // Preview immediately so LIVE PREVIEW / silk fluid can show.
+      // Preview immediately so LIVE PREVIEW can show for everyone.
       // Paywall only if they leave Themes without owning / Pro.
       await setPackId(id, true);
     },
     [setPackId],
+  );
+
+  const onPickIcon = useCallback(
+    async (id: ThemePackId) => {
+      if (!canUseThemePack(id) && id !== 'ocean') {
+        openPaywall('theme', id);
+        return;
+      }
+      await applyIconAndRestart(id);
+    },
+    [canUseThemePack, openPaywall, applyIconAndRestart],
   );
 
   const onPickChart = useCallback(
@@ -104,19 +170,22 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
       icon: '↺',
       title: 'Reset themes?',
       message:
-        'This restores Default pack, Default chart colors, Default gradient, and Dark appearance.',
+        'This restores Default pack, Default chart colors, Default gradient, Dark appearance, and the default app icon.',
       buttons: [
         { label: 'Cancel', variant: 'secondary' },
         {
           label: 'Reset',
           variant: 'danger',
           onPress: () => {
-            void resetToDefaults();
+            void (async () => {
+              await resetToDefaults();
+              await applyIconAndRestart('ocean');
+            })();
           },
         },
       ],
     });
-  }, [resetToDefaults]);
+  }, [resetToDefaults, applyIconAndRestart]);
 
   const appearances: { id: AppearanceMode; label: string }[] = [
     { id: 'light', label: 'Light' },
@@ -285,6 +354,45 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
             })}
           </View>
 
+          <Text style={styles.section}>App icon</Text>
+          <Text style={styles.sectionHint}>
+            Choose a home screen icon. Pro themes need Pro to apply.
+          </Text>
+          <View style={styles.iconGrid}>
+            {THEME_PACKS.map(pack => {
+              const iconActive = iconPackId === pack.id;
+              const locked = pack.pro && !canUseThemePack(pack.id);
+              return (
+                <Pressable
+                  key={`icon-${pack.id}`}
+                  style={[styles.iconCard, iconActive && styles.iconCardActive]}
+                  onPress={() => void onPickIcon(pack.id)}
+                >
+                  <View style={styles.packIconWrap}>
+                    <Image
+                      source={APP_ICON_PREVIEWS[pack.id]}
+                      style={styles.packIcon}
+                      resizeMode="cover"
+                    />
+                    {locked ? (
+                      <View style={styles.packIconBadge}>
+                        <Text style={styles.packIconBadgeText}>🔒</Text>
+                      </View>
+                    ) : null}
+                    {iconActive ? (
+                      <View style={[styles.packIconBadge, styles.packIconBadgeHome]}>
+                        <Text style={styles.packIconBadgeText}>✓</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <Text style={styles.iconName} numberOfLines={1}>
+                    {pack.name}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
           <Text style={styles.section}>Gradient style</Text>
           <View style={styles.card}>
             {GRADIENT_STYLES.map((g, idx) => {
@@ -423,6 +531,21 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       marginBottom: Spacing.sm,
       marginTop: Spacing.md,
     },
+    sectionHint: {
+      ...Typography.caption,
+      color: colors.textMuted,
+      marginTop: -Spacing.xs,
+      marginBottom: Spacing.sm,
+    },
+    followRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.md,
+      paddingVertical: Spacing.md,
+    },
+    followCopy: { flex: 1 },
+    followTitle: { ...Typography.bodyBold, color: colors.text },
+    followSub: { ...Typography.caption, color: colors.textMuted, marginTop: 2 },
     card: {
       backgroundColor: colors.surface,
       borderRadius: Radius.xl,
@@ -520,6 +643,66 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       alignItems: 'center',
       justifyContent: 'center',
       marginBottom: Spacing.sm,
+    },
+    iconGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: Spacing.sm,
+      marginBottom: Spacing.md,
+    },
+    iconCard: {
+      width: '22%',
+      flexGrow: 1,
+      maxWidth: '24%',
+      alignItems: 'center',
+      paddingVertical: Spacing.sm,
+      paddingHorizontal: 4,
+      borderRadius: Radius.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+    },
+    iconCardActive: {
+      borderColor: colors.primary,
+      backgroundColor: colors.primary + '12',
+    },
+    packIconWrap: {
+      width: 56,
+      height: 56,
+      borderRadius: 14,
+      overflow: 'hidden',
+      marginBottom: 6,
+      backgroundColor: colors.surfaceHighlight,
+    },
+    packIcon: {
+      width: 56,
+      height: 56,
+    },
+    packIconBadge: {
+      position: 'absolute',
+      right: 2,
+      bottom: 2,
+      width: 18,
+      height: 18,
+      borderRadius: 9,
+      backgroundColor: '#00000088',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    packIconBadgeHome: {
+      backgroundColor: colors.primary,
+    },
+    packIconBadgeText: {
+      fontSize: 10,
+      color: '#FFF',
+      fontWeight: '800',
+    },
+    iconName: {
+      ...Typography.small,
+      color: colors.text,
+      fontWeight: '600',
+      fontSize: 10,
+      textAlign: 'center',
     },
     lockGlyph: { fontSize: 14 },
     checkGlyph: { color: '#FFF', fontWeight: '800', fontSize: 16 },

@@ -149,8 +149,10 @@ export function filterExpenses(
   if (!interval) return expenses;
   return expenses.filter(e => {
     const d = safeExpenseDay(e.date);
-    // Bad/missing dates: still show (don't hide partner sync items)
-    if (!d) return true;
+    // A bounded period must contain only rows that can be placed inside it.
+    // Invalid dates remain available under "All" instead of leaking into
+    // Week, Month, and Year results.
+    if (!d) return false;
     return isWithinInterval(d, {
       start: startOfDay(interval.start),
       end: endOfDay(interval.end),

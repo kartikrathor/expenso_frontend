@@ -146,10 +146,13 @@ export function HoldMicFab({ onSave }: HoldMicFabProps) {
           date: new Date().toISOString(),
         });
         haptic('notificationSuccess');
-      } catch {
+      } catch (err) {
         showAlert(
           'Couldn’t save',
-          'Your expense wasn’t saved. Please check your connection and try again.',
+          userFacingError(
+            err,
+            'Your expense wasn’t saved. Please check your connection and try again.',
+          ),
           undefined,
           '❌',
         );

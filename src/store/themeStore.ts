@@ -18,7 +18,7 @@ const PACK_KEY = '@expensewise_theme_pack';
 const CHART_KEY = '@expensewise_chart_palette';
 const GRADIENT_KEY = '@expensewise_gradient_style';
 
-const DEFAULT_APPEARANCE: AppearanceMode = 'dark';
+const DEFAULT_APPEARANCE: AppearanceMode = 'light';
 const DEFAULT_PACK: ThemePackId = 'ocean';
 const DEFAULT_CHART: ChartPaletteId = 'default';
 const DEFAULT_GRADIENT: GradientStyleId = 'default';
@@ -61,7 +61,7 @@ interface ThemeStore {
 
 export const useThemeStore = create<ThemeStore>((set, get) => ({
   appearance: DEFAULT_APPEARANCE,
-  mode: 'dark',
+  mode: 'light',
   packId: DEFAULT_PACK,
   chartPalette: DEFAULT_CHART,
   gradientStyle: DEFAULT_GRADIENT,

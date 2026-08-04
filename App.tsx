@@ -8,6 +8,7 @@ import { AuthScreen } from './src/screens/AuthScreen';
 import { ChangePasswordScreen } from './src/screens/ChangePasswordScreen';
 import { useExpenseStore } from './src/store/expenseStore';
 import { useThemeStore } from './src/store/themeStore';
+import { useAppIconStore } from './src/store/appIconStore';
 import { useProStore } from './src/store/proStore';
 import { useTheme } from './src/hooks/useTheme';
 import { useOnboarding } from './src/hooks/useOnboarding';
@@ -32,6 +33,7 @@ import { startAddExpenseLinking } from './src/utils/expenseWidget';
 function AppContent() {
   const isExpensesLoaded = useExpenseStore(s => s.isLoaded);
   const loadTheme = useThemeStore(s => s.loadTheme);
+  const loadAppIcon = useAppIconStore(s => s.load);
   const isThemeLoaded = useThemeStore(s => s.isLoaded);
   const loadPro = useProStore(s => s.loadPro);
   const loadAuth = useAuthStore(s => s.loadAuth);
@@ -51,12 +53,14 @@ function AppContent() {
 
   useEffect(() => {
     loadTheme();
+    loadAppIcon();
     loadPro();
     loadAuth();
-  }, [loadTheme, loadPro, loadAuth]);
+  }, [loadTheme, loadAppIcon, loadPro, loadAuth]);
 
   useEffect(() => {
-    if (!isAuthLoaded) return;
+    if (!isAuthLoaded || !token) return;
+    // Login/register already apply Pro from /auth response; this reconfirms via /api/pro/me.
     void useProStore.getState().refreshEntitlement();
   }, [isAuthLoaded, token, user?.id]);
 

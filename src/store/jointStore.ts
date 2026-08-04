@@ -42,6 +42,8 @@ type GroupApi = {
 };
 
 type CreatePayload = {
+  /** Stable across retries/migrations so the backend can return the existing row. */
+  clientId?: string;
   amount: number;
   merchantLabel: string;
   merchant?: MerchantId;
@@ -57,6 +59,12 @@ type OutboxItem =
       type: 'create';
       clientId: string;
       payload: CreatePayload;
+      attempts: number;
+    }
+  | {
+      id: string;
+      type: 'cancelCreate';
+      clientId: string;
       attempts: number;
     }
   | {
@@ -211,10 +219,29 @@ function sortNewest(list: Expense[]): Expense[] {
   return [...list].sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0));
 }
 
+function dedupeExactExpenses(list: Expense[]): Expense[] {
+  const seen = new Set<string>();
+  return list.filter(expense => {
+    const key = JSON.stringify([
+      expense.groupId || '',
+      Number(expense.amount),
+      expense.merchantLabel.trim().toLowerCase(),
+      expense.category.trim().toLowerCase(),
+      expense.note.trim(),
+      expense.date,
+      expense.paidById || '',
+      expense.createdById || '',
+    ]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /** Merge server list with in-memory pending creates (never drop local pending). */
 function mergeExpenses(server: Expense[], current: Expense[], outbox: OutboxItem[]): Expense[] {
   const byId = new Map<string, Expense>();
-  server.forEach(e => byId.set(e.id, e));
+  dedupeExactExpenses(server).forEach(e => byId.set(e.id, e));
 
   // Keep pending_* items still in outbox as create
   const pendingCreateIds = new Set(
@@ -242,6 +269,7 @@ function mergeExpenses(server: Expense[], current: Expense[], outbox: OutboxItem
 
 let fetchSeq = 0;
 let flushing = false;
+const duplicateCleanupDone = new Set<string>();
 /** Bumped on logout / account switch so in-flight flush/load never wipe disk or restore stale UI. */
 let sessionEpoch = 0;
 
@@ -530,6 +558,18 @@ export const useJointStore = create<JointStore>((set, get) => ({
       const results = await Promise.all(
         groups.map(async g => {
           try {
+            if (!duplicateCleanupDone.has(g.id)) {
+              try {
+                await apiRequest(`/api/groups/${g.id}/expenses/dedupe`, {
+                  method: 'POST',
+                  token,
+                  timeoutMs: 25000,
+                });
+                duplicateCleanupDone.add(g.id);
+              } catch {
+                // Older/offline backend: exact duplicates are still hidden client-side.
+              }
+            }
             const data = await apiRequest<{ expenses: JointExpenseRaw[] }>(
               `/api/groups/${g.id}/expenses`,
               { token, timeoutMs: 25000 },
@@ -570,7 +610,7 @@ export const useJointStore = create<JointStore>((set, get) => ({
     const joint = get().joint;
     if (!joint) throw new Error('Join or create a joint account first.');
 
-    const clientId = `pending_${generateId()}`;
+    const clientId = payload.clientId || `pending_${generateId()}`;
     const local = pendingExpense(clientId, payload, joint);
     const item: OutboxItem = {
       id: generateId(),
@@ -593,16 +633,27 @@ export const useJointStore = create<JointStore>((set, get) => ({
     const joint = get().joint;
     if (!joint) return;
 
-    // If still pending create, just drop it from outbox + UI
+    // A timed-out POST may already exist on the server. Replace the create
+    // with a queued cancellation keyed by the same idempotency clientId.
     const createItem = get().outbox.find(
       i => i.type === 'create' && i.clientId === id,
     );
     if (createItem) {
-      const outbox = get().outbox.filter(i => i.id !== createItem.id);
+      const cancelItem: OutboxItem = {
+        id: generateId(),
+        type: 'cancelCreate',
+        clientId: createItem.clientId,
+        attempts: 0,
+      };
+      const outbox = [
+        ...get().outbox.filter(i => i.id !== createItem.id),
+        cancelItem,
+      ];
       const expenses = get().expenses.filter(e => e.id !== id);
       set({ outbox, expenses, pendingCount: outbox.length });
       await persistCache(joint.id, expenses);
       await persistOutbox(joint.id, outbox);
+      await get().flushOutbox();
       return;
     }
 
@@ -696,6 +747,7 @@ export const useJointStore = create<JointStore>((set, get) => ({
                   category: item.payload.category || 'other',
                   note: item.payload.note || '',
                   date: item.payload.date || new Date().toISOString(),
+                  clientId: item.clientId,
                 },
               },
             );
@@ -729,6 +781,21 @@ export const useJointStore = create<JointStore>((set, get) => ({
               ...get().expenses.filter(e => e.id !== item.clientId && e.id !== saved.id),
             ]);
             set({ outbox, expenses, pendingCount: outbox.length, error: null });
+          } else if (item.type === 'cancelCreate') {
+            await apiRequest(
+              `/api/groups/${groupId}/expenses/by-client/${encodeURIComponent(item.clientId)}`,
+              {
+                method: 'DELETE',
+                token,
+                timeoutMs: 30000,
+              },
+            );
+            if (sessionEpoch !== epoch || get().joint?.id !== groupId) break;
+            fetchSeq += 1;
+            const outbox = get().outbox.filter(i => i.id !== item.id);
+            set({ outbox, pendingCount: outbox.length, error: null });
+            await persistOutbox(groupId, outbox);
+            await persistCache(groupId, get().expenses);
           } else if (item.type === 'update') {
             await apiRequest(`/api/groups/${groupId}/expenses/${item.expenseId}`, {
               method: 'PATCH',

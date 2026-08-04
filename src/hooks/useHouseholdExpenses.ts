@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuthStore } from '../store/authStore';
 import { useExpenseStore } from '../store/expenseStore';
 import { useJointStore } from '../store/jointStore';
+import { useActivityStore } from '../store/activityStore';
 import { TimeFilter } from '../types/expense';
 import {
   categoryBreakdown,
@@ -51,6 +52,7 @@ async function syncLocalIntoJointOnce() {
     if (synced.has(e.id)) continue;
     try {
       await useJointStore.getState().addJointExpense({
+        clientId: `pending_migration_${e.id}`,
         amount: e.amount,
         merchantLabel: e.merchantLabel,
         merchant: e.merchant,
@@ -112,6 +114,12 @@ export function useHouseholdExpenses() {
         await refreshPersonal();
       }
       lastRefreshAt.current = Date.now();
+      // Keep Activity in sync when expenses arrive from server after login/refresh
+      const j = useJointStore.getState().joint;
+      const list = j
+        ? useJointStore.getState().expenses
+        : useExpenseStore.getState().expenses;
+      await useActivityStore.getState().seedFromExpenses(list, j ? 'joint' : 'local');
     } finally {
       refreshLock.current = false;
     }

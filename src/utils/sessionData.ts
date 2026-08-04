@@ -49,5 +49,14 @@ export async function bindSessionToUser(userId: string | null) {
     useMerchantStore.getState().loadMerchants(),
   ]);
   if (epoch !== bindEpoch) return;
-  void preloadAskChatHistory(userId);
+
+  // Activity is local-only — seed from synced expenses so Log → Activity isn't empty after login
+  const joint = useJointStore.getState().joint;
+  const expenses = joint
+    ? useJointStore.getState().expenses
+    : useExpenseStore.getState().expenses;
+  await useActivityStore.getState().seedFromExpenses(expenses, joint ? 'joint' : 'local');
+  if (epoch !== bindEpoch) return;
+
+  await preloadAskChatHistory(userId);
 }

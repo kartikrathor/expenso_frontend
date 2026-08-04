@@ -674,6 +674,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       textAlign: 'center',
       marginTop: Spacing.md,
       lineHeight: 18,
+      paddingHorizontal:30
     },
     legalLink: {
       color: colors.primaryLight,

@@ -37,6 +37,11 @@ interface ActivityStore {
   load: () => Promise<void>;
   loadForUser: (userId: string | null) => Promise<void>;
   clearAll: () => Promise<void>;
+  /**
+   * After login/sync: create "added" rows for expenses that have no activity yet.
+   * Activity is device-local; server expenses would otherwise leave the Log → Activity tab empty.
+   */
+  seedFromExpenses: (expenses: Expense[], source?: 'local' | 'joint') => Promise<void>;
   logAdded: (expense: Expense, source?: 'local' | 'joint') => Promise<void>;
   logEdited: (
     before: Expense,
@@ -156,5 +161,33 @@ export const useActivityStore = create<ActivityStore>((set, get) => ({
     const userId = get().activeUserId;
     set({ activities: [] });
     if (userId) await AsyncStorage.removeItem(activityKey(userId));
+  },
+
+  seedFromExpenses: async (expenses, source = 'local') => {
+    const { activities, activeUserId } = get();
+    if (!activeUserId || !expenses.length) return;
+
+    const covered = new Set(activities.map(a => a.expenseId));
+    const missing = expenses.filter(e => e?.id && !covered.has(e.id));
+    if (!missing.length) return;
+
+    const seeded: ActivityItem[] = missing.map(expense => ({
+      id: `act_seed_${expense.id}`,
+      type: 'added',
+      at: expense.createdAt || expense.date || new Date().toISOString(),
+      expenseId: expense.id,
+      amount: expense.amount,
+      merchantLabel: expense.merchantLabel || 'Expense',
+      category: expense.category,
+      note: expense.note || '',
+      byName: expense.createdByName || actorName(),
+      source,
+    }));
+
+    const merged = [...seeded, ...activities]
+      .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+      .slice(0, MAX_ITEMS);
+    set({ activities: merged });
+    await persist(merged, activeUserId);
   },
 }));

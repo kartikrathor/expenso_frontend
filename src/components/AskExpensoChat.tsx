@@ -125,7 +125,8 @@ function initialMessages(
   }
   const cached = getAskChatHistoryCached(userId, isJoint);
   if (cached === null) {
-    return { messages: [], ready: false };
+    // Never blank the Ask tab while AsyncStorage hydrates — show welcome, swap if history exists
+    return { messages: [welcomeBubble(isJoint)], ready: true };
   }
   const mapped = mapStored(cached);
   const hasReal = mapped.some(m => m.id !== 'welcome');
@@ -177,6 +178,16 @@ export function AskExpensoChat({
   const [messages, setMessages] = useState<ChatBubble[]>(boot.messages);
   const listRef = useRef<FlatList>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollToLatest = useCallback((animated = true) => {
+    // The list is inverted, so offset 0 is the newest message.
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToOffset({ offset: 0, animated });
+    });
+  }, []);
+  /** Block persist until first AsyncStorage read finishes (avoids wiping real history with welcome). */
+  const hydratePending = useRef(
+    !!userId && getAskChatHistoryCached(userId, isJoint) === null,
+  );
 
   // Newest-first for inverted FlatList (chat sticks to bottom without scroll jump)
   const listData = useMemo(() => [...messages].reverse(), [messages]);
@@ -196,20 +207,24 @@ export function AskExpensoChat({
       else setChips(welcome.chips || startChipsFor('en', isJoint));
       const lastIntentMsg = [...next].reverse().find(m => m.role === 'assistant' && m.intent);
       setLastIntent(lastIntentMsg?.intent);
+      hydratePending.current = false;
       setHistoryReady(true);
     };
 
     const cached = userId ? getAskChatHistoryCached(userId, isJoint) : null;
     if (!userId) {
+      hydratePending.current = false;
       apply([]);
       return;
     }
     if (cached !== null) {
+      hydratePending.current = false;
       apply(mapStored(cached));
       return;
     }
 
-    setHistoryReady(false);
+    hydratePending.current = true;
+    // Keep welcome visible; only swap when stored history has real turns
     (async () => {
       const stored = await loadAskChatHistory(userId, isJoint);
       if (cancelled) return;
@@ -240,16 +255,19 @@ export function AskExpensoChat({
 
   // Persist chat (debounce) — auto-prunes > 30 days on save
   useEffect(() => {
-    if (!historyReady || !userId) return;
+    if (!historyReady || !userId || hydratePending.current) return;
     const epoch = getAskChatClearEpoch();
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
+      if (hydratePending.current) return;
       void saveAskChatHistory(userId, isJoint, withTimestamps(messages), { epoch });
     }, 400);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       // Flush latest on unmount / dependency change so leaving Ask doesn't drop last turn
-      void saveAskChatHistory(userId, isJoint, withTimestamps(messages), { epoch });
+      if (!hydratePending.current) {
+        void saveAskChatHistory(userId, isJoint, withTimestamps(messages), { epoch });
+      }
     };
   }, [messages, userId, isJoint, historyReady]);
 
@@ -391,6 +409,7 @@ export function AskExpensoChat({
         createdAt: Date.now(),
       };
       setMessages(prev => [...prev, userMsg]);
+      scrollToLatest();
       if (mode === 'keyboard') setInput('');
       setBusy(true);
 
@@ -454,6 +473,7 @@ export function AskExpensoChat({
             canPrecise: data.source !== 'precise',
           },
         ]);
+        scrollToLatest();
         setChips(replyChips);
       } catch (err: any) {
         const proBlocked =
@@ -481,11 +501,22 @@ export function AskExpensoChat({
             canPrecise: true,
           },
         ]);
+        scrollToLatest();
       } finally {
         setBusy(false);
       }
     },
-    [token, busy, expenses, monthlyBudget, isJoint, lastIntent, chips, openPaywall],
+    [
+      token,
+      busy,
+      expenses,
+      monthlyBudget,
+      isJoint,
+      lastIntent,
+      chips,
+      openPaywall,
+      scrollToLatest,
+    ],
   );
 
   const requestPrecise = useCallback(
@@ -787,7 +818,7 @@ export function AskExpensoChat({
                 editable={!busy && isPro}
                 pointerEvents={isPro ? 'auto' : 'none'}
                 onFocus={() => {
-                  setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 150);
+                  setTimeout(() => scrollToLatest(), 150);
                 }}
                 onSubmitEditing={() => send(input, 'keyboard')}
                 returnKeyType="send"

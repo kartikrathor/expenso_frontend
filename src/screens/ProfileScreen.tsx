@@ -301,9 +301,16 @@ export function ProfileScreen() {
                 />
               </View>
             ) : (
-              <View style={[styles.avatar, { backgroundColor: user.avatarColor }]}>
-                <Text style={styles.avatarText}>{user.name.charAt(0).toUpperCase()}</Text>
-              </View>
+              <LinearGradient
+                colors={[...actionGradient]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={[styles.avatar, styles.initialAvatar]}
+              >
+                <Text style={styles.avatarText}>
+                  {(user.name.trim()[0] || '?').toUpperCase()}
+                </Text>
+              </LinearGradient>
             )}
             <View style={styles.profileInfo}>
               <Text style={styles.profileName}>{user.name}</Text>
@@ -587,6 +594,11 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       backgroundColor: '#0B1220',
       borderWidth: 1.5,
       borderColor: colors.primary + '88',
+    },
+    /** Default / non-spider: name initial on theme gradient */
+    initialAvatar: {
+      borderWidth: 1.5,
+      borderColor: colors.primary + '55',
     },
     avatarImage: {
       width: 56,

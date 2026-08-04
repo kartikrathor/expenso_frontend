@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -41,6 +41,9 @@ import {
 
 type Tab = 'expenses' | 'activity';
 
+const EXPENSE_BATCH_SIZE = 30;
+const ACTIVITY_BATCH_SIZE = 40;
+
 const PERIODS: { id: HistoryPeriod; label: string }[] = [
   { id: 'all', label: 'All' },
   { id: 'day', label: 'Day' },
@@ -60,6 +63,9 @@ export function HistoryScreen() {
   const [activityFilter, setActivityFilter] = useState<'all' | 'added' | 'edited' | 'deleted'>('all');
   const [period, setPeriod] = useState<HistoryPeriod>('all');
   const [periodAnchor, setPeriodAnchor] = useState(() => new Date());
+  const [expenseLimit, setExpenseLimit] = useState(EXPENSE_BATCH_SIZE);
+  const [activityLimit, setActivityLimit] = useState(ACTIVITY_BATCH_SIZE);
+  const deferredSearch = useDeferredValue(search.trim().toLowerCase());
 
   const { isJoint, expenses, onRefresh, refreshing } = useHouseholdExpenses();
   const activities = useActivityStore(s => s.activities);
@@ -71,30 +77,45 @@ export function HistoryScreen() {
     const byPeriod = filterByHistoryPeriod(expenses, period, periodAnchor);
     return byPeriod.filter(e => {
       const matchesSearch =
-        !search ||
-        e.merchantLabel.toLowerCase().includes(search.toLowerCase()) ||
-        e.note.toLowerCase().includes(search.toLowerCase()) ||
-        e.amount.toString().includes(search);
+        !deferredSearch ||
+        e.merchantLabel.toLowerCase().includes(deferredSearch) ||
+        e.note.toLowerCase().includes(deferredSearch) ||
+        e.amount.toString().includes(deferredSearch);
       const matchesCategory = categoryFilter === 'all' || e.category === categoryFilter;
       return matchesSearch && matchesCategory;
     });
-  }, [expenses, search, categoryFilter, period, periodAnchor]);
+  }, [expenses, deferredSearch, categoryFilter, period, periodAnchor]);
 
-  const sections = useMemo(() => groupExpensesByDay(filteredExpenses), [filteredExpenses]);
+  const visibleExpenses = useMemo(
+    () => filteredExpenses.slice(0, expenseLimit),
+    [filteredExpenses, expenseLimit],
+  );
+  const sections = useMemo(() => groupExpensesByDay(visibleExpenses), [visibleExpenses]);
 
   const filteredActivity = useMemo(() => {
     return activities.filter(a => {
       if (activityFilter !== 'all' && a.type !== activityFilter) return false;
-      if (!search) return true;
-      const q = search.toLowerCase();
+      if (!deferredSearch) return true;
       return (
-        a.merchantLabel.toLowerCase().includes(q) ||
-        a.note.toLowerCase().includes(q) ||
-        a.amount.toString().includes(q) ||
-        a.byName.toLowerCase().includes(q)
+        a.merchantLabel.toLowerCase().includes(deferredSearch) ||
+        a.note.toLowerCase().includes(deferredSearch) ||
+        a.amount.toString().includes(deferredSearch) ||
+        a.byName.toLowerCase().includes(deferredSearch)
       );
     });
-  }, [activities, activityFilter, search]);
+  }, [activities, activityFilter, deferredSearch]);
+  const visibleActivity = useMemo(
+    () => filteredActivity.slice(0, activityLimit),
+    [filteredActivity, activityLimit],
+  );
+
+  useEffect(() => {
+    setExpenseLimit(EXPENSE_BATCH_SIZE);
+  }, [deferredSearch, categoryFilter, period, periodAnchor]);
+
+  useEffect(() => {
+    setActivityLimit(ACTIVITY_BATCH_SIZE);
+  }, [deferredSearch, activityFilter]);
 
   const ListHeader = useMemo(() => (
     <>
@@ -267,6 +288,12 @@ export function HistoryScreen() {
           windowSize={5}
           updateCellsBatchingPeriod={50}
           removeClippedSubviews
+          onEndReachedThreshold={0.35}
+          onEndReached={() =>
+            setExpenseLimit(current =>
+              Math.min(current + EXPENSE_BATCH_SIZE, filteredExpenses.length),
+            )
+          }
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -304,7 +331,7 @@ export function HistoryScreen() {
       ) : (
         <FlatList
           {...scrollProps}
-          data={filteredActivity}
+          data={visibleActivity}
           keyExtractor={item => item.id}
           ListHeaderComponent={ListHeader}
           contentContainerStyle={{ paddingBottom: bottomPad }}
@@ -315,6 +342,12 @@ export function HistoryScreen() {
           windowSize={5}
           updateCellsBatchingPeriod={50}
           removeClippedSubviews
+          onEndReachedThreshold={0.35}
+          onEndReached={() =>
+            setActivityLimit(current =>
+              Math.min(current + ACTIVITY_BATCH_SIZE, filteredActivity.length),
+            )
+          }
           refreshControl={
             <RefreshControl
               refreshing={refreshing}

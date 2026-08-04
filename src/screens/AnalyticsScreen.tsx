@@ -12,7 +12,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { TimeFilterBar } from '../components/TimeFilterBar';
 import { StatsChartIcon } from '../components/icons/StatsChartIcon';
-import { getCategoryConfig, getCategoryColor } from '../constants/categories';
+import { CATEGORIES, getCategoryConfig, getCategoryColor } from '../constants/categories';
 import { formatCurrency, formatCompactCurrency } from '../utils/expenseParser';
 import { Spacing, Typography, Radius } from '../constants/theme';
 import { getTabBarBottomInset } from '../constants/layout';
@@ -34,6 +34,15 @@ import { SpiderWebBackground } from '../components/SpiderWebBackground';
 import { useThemeStore } from '../store/themeStore';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+function generatedCategoryColor(category: string, attempt = 0): string {
+  const hash = Array.from(category).reduce(
+    (value, character) => (value * 31 + character.charCodeAt(0)) % 360000,
+    0,
+  );
+  const hue = (hash + attempt * 47) % 360;
+  return `hsl(${hue}, 72%, 58%)`;
+}
 
 export function AnalyticsScreen() {
   const insets = useSafeAreaInsets();
@@ -98,17 +107,36 @@ export function AnalyticsScreen() {
     return formatTimeFilterAnchor(filter, anchor);
   }, [filter, anchor, customRange]);
 
-  // Default = original category colors (Food pink, Groceries green, …). Custom palettes remint slices.
+  // Keep every visible slice distinct, including custom categories and palettes with fewer colors.
+  const categoryColors = useMemo(() => {
+    const used = new Set<string>();
+    const knownCategoryIds = new Set(CATEGORIES.map(category => category.id));
+
+    return categories.map((category, index) => {
+      let color =
+        chartPalette === 'default'
+          ? knownCategoryIds.has(category.category as any)
+            ? getCategoryColor(category.category)
+            : generatedCategoryColor(category.category)
+          : colors.chartColors[index] ?? generatedCategoryColor(category.category);
+      let attempt = 0;
+
+      while (used.has(color.toLowerCase())) {
+        attempt += 1;
+        color = generatedCategoryColor(category.category, attempt);
+      }
+      used.add(color.toLowerCase());
+      return color;
+    });
+  }, [categories, chartPalette, colors.chartColors]);
+
   const pieData = useMemo(
     () =>
       categories.map((c, i) => ({
         value: c.amount,
-        color:
-          chartPalette === 'default'
-            ? getCategoryColor(c.category)
-            : colors.chartColors[i % colors.chartColors.length] ?? getCategoryColor(c.category),
+        color: categoryColors[i],
       })),
-    [categories, chartPalette, colors.chartColors],
+    [categories, categoryColors],
   );
 
   const lineData = useMemo(
@@ -253,15 +281,16 @@ export function AnalyticsScreen() {
                         </View>
                       )}
                     />
-                    <View style={styles.legend}>
-                      {categories.slice(0, 5).map((c, i) => {
+                    <ScrollView
+                      style={styles.legend}
+                      contentContainerStyle={styles.legendContent}
+                      nestedScrollEnabled
+                      showsVerticalScrollIndicator={categories.length > 5}
+                    >
+                      {categories.map((c, i) => {
                         const cfg = getCategoryConfig(c.category as any);
                         const pct = total > 0 ? Math.round((c.amount / total) * 100) : 0;
-                        const sliceColor =
-                          chartPalette === 'default'
-                            ? getCategoryColor(c.category)
-                            : colors.chartColors[i % colors.chartColors.length] ??
-                              getCategoryColor(c.category);
+                        const sliceColor = categoryColors[i];
                         return (
                           <View key={c.category} style={styles.legendItem}>
                             <View style={[styles.legendDot, { backgroundColor: sliceColor }]} />
@@ -288,7 +317,7 @@ export function AnalyticsScreen() {
                           </View>
                         );
                       })}
-                    </View>
+                    </ScrollView>
                   </View>
                 </View>
               </View>
@@ -507,7 +536,8 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       letterSpacing: 0.8,
       fontSize: 9,
     },
-    legend: { flex: 1, gap: 10 },
+    legend: { flex: 1, maxHeight: 174 },
+    legendContent: { gap: 10, paddingRight: 4 },
     legendItem: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     legendDot: { width: 8, height: 8, borderRadius: 4 },
     legendCopy: { flex: 1, gap: 4 },

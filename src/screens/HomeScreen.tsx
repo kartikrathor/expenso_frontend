@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -11,6 +11,7 @@ import {
   Platform,
   RefreshControl,
   ListRenderItem,
+  ActivityIndicator,
 } from 'react-native';
 import Animated, { useAnimatedStyle, withSpring, useSharedValue } from 'react-native-reanimated';
 import { WaterGradient } from '../components/WaterGradient';
@@ -21,7 +22,7 @@ import { useExpenseStore } from '../store/expenseStore';
 import { useJointStore } from '../store/jointStore';
 import { useActivityStore } from '../store/activityStore';
 import { useHouseholdExpenses } from '../hooks/useHouseholdExpenses';
-import { ExpenseCard, EXPENSE_CARD_ROW_HEIGHT } from '../components/ExpenseCard';
+import { ExpenseCard } from '../components/ExpenseCard';
 import { EmptyState } from '../components/EmptyState';
 import { AddExpenseModal, ExpenseSaveData } from '../components/AddExpenseModal';
 import { HoldMicFab } from '../components/HoldMicFab';
@@ -46,6 +47,7 @@ import { useDeleteExpense } from '../hooks/useDeleteExpense';
 import { useEditExpense } from '../hooks/useEditExpense';
 import { Expense, TimeFilter, MerchantId } from '../types/expense';
 import { format } from 'date-fns';
+import { formatExpenseDayLabel } from '../utils/expenseDate';
 
 const FILTERS: { key: TimeFilter; label: string }[] = [
   { key: 'week', label: 'Week' },
@@ -53,6 +55,9 @@ const FILTERS: { key: TimeFilter; label: string }[] = [
   { key: 'year', label: 'Year' },
   { key: 'all', label: 'All' },
 ];
+
+/** First paint + each scroll page on Home */
+const HOME_PAGE_SIZE = 25;
 
 function firstName(full?: string | null) {
   const n = (full || '').trim();
@@ -69,6 +74,10 @@ export function HomeScreen() {
   const greetName = firstName(userName);
 
   const [filter, setFilter] = useState<TimeFilter>('month');
+  const [visibleCount, setVisibleCount] = useState(HOME_PAGE_SIZE);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const loadingMoreRef = useRef(false);
+  const loadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showBudget, setShowBudget] = useState(false);
   const [budgetInput, setBudgetInput] = useState('');
@@ -91,10 +100,10 @@ export function HomeScreen() {
   const { requestDelete, deleteModal } = useDeleteExpense();
   const { requestEdit, editModal } = useEditExpense();
 
-  const filtered = useMemo(() => getFiltered(filter), [getFiltered, filter, householdExpenses]);
-  const total = useMemo(() => getTotal(filter), [getTotal, filter, householdExpenses]);
-  const monthTotal = useMemo(() => getTotal('month'), [getTotal, householdExpenses]);
-  const todayTotal = useMemo(() => getTodayTotal(), [getTodayTotal, householdExpenses]);
+  const filtered = useMemo(() => getFiltered(filter), [getFiltered, filter]);
+  const total = useMemo(() => getTotal(filter), [getTotal, filter]);
+  const monthTotal = useMemo(() => getTotal('month'), [getTotal]);
+  const todayTotal = useMemo(() => getTodayTotal(), [getTodayTotal]);
 
   // Widget / shortcut requested Add Expense
   useEffect(() => {
@@ -127,9 +136,9 @@ export function HomeScreen() {
     });
   }, [onRefresh]);
 
-  // List must follow the same time filter as hero totals (was showing unfiltered "recent")
-  const listData = useMemo(() => {
-    if (filtered.length <= 1) return filtered.slice(0, 40);
+  // Newest-first list for the filter; UI pages this so Home doesn't mount every card at once.
+  const sortedExpenses = useMemo(() => {
+    if (filtered.length <= 1) return filtered;
     let needsSort = false;
     for (let i = 1; i < Math.min(filtered.length, 8); i++) {
       const a = Date.parse(filtered[i - 1].date) || 0;
@@ -139,11 +148,43 @@ export function HomeScreen() {
         break;
       }
     }
-    if (!needsSort) return filtered.slice(0, 40);
-    return [...filtered]
-      .sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0))
-      .slice(0, 40);
+    if (!needsSort) return filtered;
+    return [...filtered].sort(
+      (a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0),
+    );
   }, [filtered]);
+
+  useEffect(() => {
+    if (loadMoreTimerRef.current) {
+      clearTimeout(loadMoreTimerRef.current);
+      loadMoreTimerRef.current = null;
+    }
+    loadingMoreRef.current = false;
+    setIsLoadingMore(false);
+    setVisibleCount(HOME_PAGE_SIZE);
+    return () => {
+      if (loadMoreTimerRef.current) clearTimeout(loadMoreTimerRef.current);
+    };
+  }, [filter]);
+
+  const listData = useMemo(
+    () => sortedExpenses.slice(0, visibleCount),
+    [sortedExpenses, visibleCount],
+  );
+  const hasMore = visibleCount < sortedExpenses.length;
+
+  const loadMore = useCallback(() => {
+    if (!hasMore || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setIsLoadingMore(true);
+    // Keep the footer visible while the next render batch is prepared.
+    loadMoreTimerRef.current = setTimeout(() => {
+      setVisibleCount(n => Math.min(n + HOME_PAGE_SIZE, sortedExpenses.length));
+      loadingMoreRef.current = false;
+      loadMoreTimerRef.current = null;
+      setIsLoadingMore(false);
+    }, 300);
+  }, [hasMore, sortedExpenses.length]);
 
   const waterFill = useMemo(() => {
     if (monthlyBudget <= 0) return 0.58;
@@ -185,6 +226,11 @@ export function HomeScreen() {
       : filter === 'week' ? 'This Week'
         : filter === 'year' ? 'This Year'
           : 'All Time';
+  const listTitle =
+    filter === 'week' ? 'This week’s expenses'
+      : filter === 'month' ? 'This month’s expenses'
+        : filter === 'year' ? 'This year’s expenses'
+          : 'All expenses';
 
   const openBudget = useCallback(() => {
     setBudgetInput(monthlyBudget > 0 ? String(monthlyBudget) : '');
@@ -279,12 +325,16 @@ export function HomeScreen() {
         ))}
       </View>
 
-      <Text style={styles.sectionTitle}>{isJoint ? 'Shared expenses' : 'Recent'}</Text>
-      {isJoint && (
-        <Text style={styles.sectionHint}>
-          Latest from both of you · pull down to refresh
-        </Text>
-      )}
+      <View style={styles.sectionHeading}>
+        <View>
+          <Text style={styles.sectionTitle}>{listTitle}</Text>
+          <Text style={styles.sectionHint}>
+            {filtered.length} transaction{filtered.length === 1 ? '' : 's'}
+            {isJoint ? ' · shared account' : ''}
+          </Text>
+        </View>
+        <Text style={styles.periodPill}>{filterLabel}</Text>
+      </View>
     </View>
   ), [
     styles,
@@ -303,19 +353,33 @@ export function HomeScreen() {
     monthlyBudget,
     openBudget,
     filter,
+    listTitle,
     isFocused,
   ]);
 
   const renderItem = useCallback<ListRenderItem<Expense>>(
-    ({ item, index }) => (
-      <ExpenseCard
-        expense={item}
-        index={index}
-        onDelete={handleDelete}
-        onEdit={requestEdit}
-      />
-    ),
-    [handleDelete, requestEdit],
+    ({ item, index }) => {
+      const itemDay = item.date.slice(0, 10);
+      const previousDay = index > 0 ? listData[index - 1]?.date.slice(0, 10) : null;
+      const showDayHeading = index === 0 || itemDay !== previousDay;
+      return (
+        <View>
+          {showDayHeading ? (
+            <View style={styles.dayHeading}>
+              <Text style={styles.dayHeadingText}>{formatExpenseDayLabel(item.date)}</Text>
+              <View style={styles.dayHeadingLine} />
+            </View>
+          ) : null}
+          <ExpenseCard
+            expense={item}
+            index={index}
+            onDelete={handleDelete}
+            onEdit={requestEdit}
+          />
+        </View>
+      );
+    },
+    [handleDelete, requestEdit, listData, styles],
   );
 
   const keyExtractor = useCallback((item: Expense) => item.id, []);
@@ -347,6 +411,24 @@ export function HomeScreen() {
     />
   ), [actionGradient, styles.emptyIcon, isJoint, householdExpenses.length, colors.gradientStart]);
 
+  const ListFooter = useMemo(() => {
+    if (listData.length === 0 || (!hasMore && !isLoadingMore)) return null;
+    return (
+      <View style={styles.loadMoreWrap}>
+        {isLoadingMore ? (
+          <>
+            <ActivityIndicator size="small" color={colors.primary} />
+            <Text style={styles.loadMoreText}>Loading more expenses…</Text>
+          </>
+        ) : (
+          <Text style={styles.loadMoreText}>
+            Showing {listData.length} of {sortedExpenses.length} · scroll for more
+          </Text>
+        )}
+      </View>
+    );
+  }, [hasMore, isLoadingMore, listData.length, sortedExpenses.length, styles, colors.primary]);
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <LinearGradient
@@ -371,20 +453,18 @@ export function HomeScreen() {
             data={listData}
             keyExtractor={keyExtractor}
             renderItem={renderItem}
-            getItemLayout={(_, index) => ({
-              length: EXPENSE_CARD_ROW_HEIGHT,
-              offset: EXPENSE_CARD_ROW_HEIGHT * index,
-              index,
-            })}
             ListHeaderComponent={ListHeader}
             ListEmptyComponent={ListEmpty}
+            ListFooterComponent={ListFooter}
             showsVerticalScrollIndicator={false}
             contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad + 72 }]}
-            initialNumToRender={8}
-            maxToRenderPerBatch={6}
-            windowSize={5}
+            initialNumToRender={HOME_PAGE_SIZE}
+            maxToRenderPerBatch={10}
+            windowSize={7}
             updateCellsBatchingPeriod={50}
             removeClippedSubviews={Platform.OS === 'android'}
+            onEndReached={loadMore}
+            onEndReachedThreshold={0.4}
             refreshControl={
               <RefreshControl
                 refreshing={refreshing}
@@ -549,19 +629,69 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     heroDivider: { width: 1, height: 32, backgroundColor: colors.border, marginHorizontal: Spacing.md },
     filterRow: {
       flexDirection: 'row',
-      flexWrap: 'wrap',
       gap: Spacing.sm,
       marginBottom: Spacing.lg,
     },
     filterChip: {
+      flex: 1,
+      alignItems: 'center',
       paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, borderRadius: Radius.full,
       backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
     },
     filterChipActive: { backgroundColor: colors.primary + '33', borderColor: colors.primary },
     filterText: { ...Typography.caption, color: colors.textSecondary },
     filterTextActive: { color: colors.primaryLight, fontWeight: '700' },
-    sectionTitle: { ...Typography.h2, color: colors.text, marginBottom: Spacing.xs, fontSize: 18 },
-    sectionHint: { ...Typography.caption, color: colors.textMuted, marginBottom: Spacing.md },
+    sectionHeading: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: Spacing.sm,
+      marginBottom: Spacing.md,
+    },
+    sectionTitle: { ...Typography.h2, color: colors.text, fontSize: 18 },
+    sectionHint: { ...Typography.caption, color: colors.textMuted, marginTop: 2 },
+    periodPill: {
+      ...Typography.small,
+      color: colors.primaryLight,
+      fontWeight: '700',
+      backgroundColor: colors.primary + '18',
+      borderWidth: 1,
+      borderColor: colors.primary + '35',
+      borderRadius: Radius.full,
+      paddingHorizontal: Spacing.sm,
+      paddingVertical: Spacing.xs,
+      overflow: 'hidden',
+    },
+    dayHeading: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
+      marginTop: Spacing.xs,
+      marginBottom: Spacing.sm,
+    },
+    dayHeadingText: {
+      ...Typography.small,
+      color: colors.textMuted,
+      fontWeight: '700',
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    dayHeadingLine: {
+      flex: 1,
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+    },
+    loadMoreWrap: {
+      minHeight: 64,
+      paddingVertical: Spacing.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: Spacing.sm,
+    },
+    loadMoreText: {
+      ...Typography.caption,
+      color: colors.textMuted,
+    },
     emptyIcon: {
       width: 88,
       height: 88,

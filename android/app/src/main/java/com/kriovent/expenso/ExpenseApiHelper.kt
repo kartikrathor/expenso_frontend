@@ -25,6 +25,7 @@ object ExpenseApiHelper {
     groupId: String,
     parsed: ParsedQuickExpense,
     inputMethod: String,
+    clientId: String,
   ): Result {
     val iso = isoNow()
     return try {
@@ -36,6 +37,7 @@ object ExpenseApiHelper {
             .put("category", parsed.category)
             .put("note", parsed.note)
             .put("date", iso)
+            .put("clientId", clientId)
         val res = request("POST", "$baseUrl/api/groups/$groupId/expenses", token, body)
         if (!res.ok) return Result(false, res.message)
         val expense = res.json?.optJSONObject("expense")
@@ -65,6 +67,7 @@ object ExpenseApiHelper {
             .put("note", parsed.note)
             .put("date", iso)
             .put("inputMethod", inputMethod)
+            .put("clientId", clientId)
         val res = request("POST", "$baseUrl/api/expenses", token, body)
         if (!res.ok) return Result(false, res.message)
         val expense = res.json?.optJSONObject("expense")

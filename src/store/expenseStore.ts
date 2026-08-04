@@ -8,6 +8,7 @@ import {
 import { filterExpenses, sortByNewest } from '../utils/expenseAnalytics';
 import { apiRequest } from '../services/api';
 import { useAuthStore } from './authStore';
+import { generateId } from '../utils/generateId';
 
 function expensesKey(userId: string) {
   return `@expensewise_expenses_${userId}`;
@@ -103,9 +104,34 @@ function toExpense(raw: ServerExpense): Expense {
   };
 }
 
+function exactServerExpenseKey(raw: ServerExpense): string {
+  const date = new Date(raw.date).toISOString();
+  return JSON.stringify([
+    Number(raw.amount),
+    raw.merchantLabel.trim().toLowerCase(),
+    (raw.merchant || 'default').trim().toLowerCase(),
+    (raw.category || 'other').trim().toLowerCase(),
+    (raw.note || '').trim(),
+    date,
+    raw.inputMethod === 'voice' ? 'voice' : 'manual',
+  ]);
+}
+
+function dedupeServerExpenses(expenses: ServerExpense[]): ServerExpense[] {
+  const seen = new Set<string>();
+  return expenses.filter(expense => {
+    const key = exactServerExpenseKey(expense);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 let pendingPersist: { userId: string; expenses: Expense[]; budget: number } | null = null;
 /** Bumps on every loadForUser so stale network responses never overwrite a newer session. */
 let loadSeq = 0;
+const personalSyncInFlight = new Map<string, Promise<number>>();
+const duplicateCleanupDone = new Set<string>();
 
 async function writePersistJob(job: { userId: string; expenses: Expense[]; budget: number }) {
   await AsyncStorage.setItem(expensesKey(job.userId), JSON.stringify(job.expenses));
@@ -195,7 +221,7 @@ async function collectLocalCandidates(userId: string): Promise<{
  * Only uploads local-only IDs (never re-POSTs a Mongo id that was deleted remotely).
  * Dedupes by amount + merchant + day + note so pull/refresh won't create duplicates.
  */
-async function syncLocalCacheToServer(userId: string, token: string): Promise<number> {
+async function syncLocalCacheToServerOnce(userId: string, token: string): Promise<number> {
   const local = await collectLocalCandidates(userId);
   let uploadedCount = 0;
 
@@ -208,7 +234,7 @@ async function syncLocalCacheToServer(userId: string, token: string): Promise<nu
   const uploaded = new Set(uploadedIds);
 
   const remote = await apiRequest<{ expenses: ServerExpense[] }>('/api/expenses', { token });
-  const remoteList = remote.expenses || [];
+  const remoteList = dedupeServerExpenses(remote.expenses || []);
   const remoteIds = new Set(remoteList.map(e => e._id));
   const remoteFps = new Set(remoteList.map(e => expenseFingerprint(toExpense(e))));
 
@@ -245,6 +271,7 @@ async function syncLocalCacheToServer(userId: string, token: string): Promise<nu
           note: e.note,
           date: e.date,
           inputMethod: e.inputMethod,
+          clientId: `migration_${e.id}`,
         },
       });
       uploaded.add(e.id);
@@ -281,6 +308,29 @@ async function syncLocalCacheToServer(userId: string, token: string): Promise<nu
   }
 
   return uploadedCount;
+}
+
+async function syncLocalCacheToServer(userId: string, token: string): Promise<number> {
+  const existing = personalSyncInFlight.get(userId);
+  if (existing) return existing;
+
+  const task = (async () => {
+    if (!duplicateCleanupDone.has(userId)) {
+      try {
+        await apiRequest('/api/expenses/dedupe', { method: 'POST', token });
+        duplicateCleanupDone.add(userId);
+      } catch {
+        // Older/offline backend: the client-side exact dedupe still protects the UI.
+      }
+    }
+    return syncLocalCacheToServerOnce(userId, token);
+  })();
+  personalSyncInFlight.set(userId, task);
+  try {
+    return await task;
+  } finally {
+    if (personalSyncInFlight.get(userId) === task) personalSyncInFlight.delete(userId);
+  }
 }
 
 export const useExpenseStore = create<ExpenseStore>((set, get) => ({
@@ -336,7 +386,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
       ]);
       if (seq !== loadSeq || get().activeUserId !== userId) return;
 
-      const remoteList = sortByNewest((listRes.expenses || []).map(toExpense));
+      const remoteList = sortByNewest(dedupeServerExpenses(listRes.expenses || []).map(toExpense));
       const remoteFps = new Set(remoteList.map(expenseFingerprint));
       // Keep any still-local-only rows that failed to upload (don't wipe them on pull)
       const orphans = (await collectLocalCandidates(userId)).expenses.filter(
@@ -370,7 +420,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
         apiRequest<{ monthlyBudget: number }>('/api/expenses/budget', { token }),
       ]);
       if (seq !== loadSeq || get().activeUserId !== userId) return;
-      const remoteList = sortByNewest((listRes.expenses || []).map(toExpense));
+      const remoteList = sortByNewest(dedupeServerExpenses(listRes.expenses || []).map(toExpense));
       const remoteFps = new Set(remoteList.map(expenseFingerprint));
       const orphans = (await collectLocalCandidates(userId)).expenses.filter(
         e => isLocalOnlyId(e.id) && !remoteFps.has(expenseFingerprint(e)),
@@ -426,6 +476,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
       throw new Error('Please sign in again to continue.');
     }
 
+    const clientId = `personal_${generateId()}`;
     const res = await apiRequest<{ expense: ServerExpense }>('/api/expenses', {
       method: 'POST',
       token,
@@ -437,6 +488,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
         note: data.note,
         date: data.date,
         inputMethod: data.inputMethod,
+        clientId,
       },
     });
 

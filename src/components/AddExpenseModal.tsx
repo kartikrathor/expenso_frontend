@@ -310,7 +310,10 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
     } catch (err) {
       showAlert(
         'Couldn’t save',
-        'Your expense wasn’t saved. Please check your connection and try again.',
+        userFacingError(
+          err,
+          'Your expense wasn’t saved. Please check your connection and try again.',
+        ),
         undefined,
         '❌',
       );

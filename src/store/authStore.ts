@@ -1,10 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
-import { apiRequest } from '../services/api';
+import { apiRequest, ApiError } from '../services/api';
 import { userFacingError } from '../utils/userFacingError';
 
 const TOKEN_KEY = '@expenso_auth_token';
 const USER_KEY = '@expenso_auth_user';
+
+export type AuthProEntitlement = {
+  isPro?: boolean;
+  plan?: 'monthly' | 'yearly' | null;
+  expiresAt?: string | null;
+  ownedThemePacks?: string[];
+};
 
 export interface AuthUser {
   id: string;
@@ -18,6 +25,8 @@ export interface AuthUser {
   notifyMeOnPartnerJointAdd?: boolean;
   /** After support temp password — force change */
   mustChangePassword?: boolean;
+  /** Present on login /auth/me — applied into proStore */
+  pro?: AuthProEntitlement;
 }
 
 export type PasswordResetRequestView = {
@@ -78,6 +87,28 @@ async function clearSession() {
   await AsyncStorage.removeItem(USER_KEY);
 }
 
+async function syncProFromUser(user: AuthUser | null | undefined) {
+  try {
+    const { useProStore } = await import('./proStore');
+    if (user?.pro) {
+      await useProStore.getState().applyEntitlement(user.pro);
+    } else if (user?.id) {
+      await useProStore.getState().refreshEntitlement();
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+async function clearProOnLogout() {
+  try {
+    const { useProStore } = await import('./proStore');
+    await useProStore.getState().clearEntitlement();
+  } catch {
+    /* ignore */
+  }
+}
+
 export const useAuthStore = create<AuthStore>((set, get) => ({
   user: null,
   token: null,
@@ -90,13 +121,21 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       const token = await AsyncStorage.getItem(TOKEN_KEY);
       const userRaw = await AsyncStorage.getItem(USER_KEY);
       if (token && userRaw) {
-        set({ token, user: JSON.parse(userRaw), isLoaded: true });
+        const cachedUser = JSON.parse(userRaw) as AuthUser;
+        set({ token, user: cachedUser, isLoaded: true });
+        await syncProFromUser(cachedUser);
         try {
           const data = await apiRequest<{ user: AuthUser }>('/api/auth/me', { token });
           set({ user: data.user });
           await AsyncStorage.setItem(USER_KEY, JSON.stringify(data.user));
-        } catch {
-          // token may be expired — keep cached until next login fails
+          await syncProFromUser(data.user);
+        } catch (err) {
+          // Invalid/expired token → force re-login. Network errors keep cache (offline).
+          if (err instanceof ApiError && err.status === 401) {
+            await clearSession();
+            await clearProOnLogout();
+            set({ user: null, token: null, isLoaded: true });
+          }
         }
         return;
       }
@@ -117,6 +156,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       });
       await persistSession(data.token, data.user);
       set({ token: data.token, user: data.user, isBusy: false });
+      await syncProFromUser(data.user);
     } catch (err: any) {
       set({
         isBusy: false,
@@ -137,6 +177,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       });
       await persistSession(data.token, data.user);
       set({ token: data.token, user: data.user, isBusy: false });
+      await syncProFromUser(data.user);
     } catch (err: any) {
       set({
         isBusy: false,
@@ -161,6 +202,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       /* ignore */
     }
     await clearSession();
+    await clearProOnLogout();
     set({ user: null, token: null, error: null });
     // Session stores cleared by App.tsx when user becomes null
   },
@@ -182,6 +224,7 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
         /* ignore */
       }
       await clearSession();
+      await clearProOnLogout();
       set({ user: null, token: null, isBusy: false, error: null });
     } catch (err: any) {
       set({
