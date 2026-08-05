@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import {
   DarkTheme,
   DefaultTheme,
@@ -43,17 +43,27 @@ export function AppNavigator() {
     navRef.current?.navigate('Home');
   }, [openAdd]);
 
-  const navTheme = {
-    ...(isDark ? DarkTheme : DefaultTheme),
-    colors: {
-      ...(isDark ? DarkTheme : DefaultTheme).colors,
-      background: colors.background,
-      card: colors.surface,
-      border: colors.border,
-      primary: colors.primary,
-      text: colors.text,
-    },
-  };
+  const navTheme = useMemo(() => {
+    const base = isDark ? DarkTheme : DefaultTheme;
+    return {
+      ...base,
+      colors: {
+        ...base.colors,
+        background: colors.background,
+        card: colors.surface,
+        border: colors.border,
+        primary: colors.primary,
+        text: colors.text,
+      },
+    };
+  }, [
+    isDark,
+    colors.background,
+    colors.surface,
+    colors.border,
+    colors.primary,
+    colors.text,
+  ]);
 
   return (
     <NavigationContainer ref={navRef} theme={navTheme}>

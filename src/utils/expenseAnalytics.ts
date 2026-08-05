@@ -1,6 +1,5 @@
 import {
   isToday,
-  isWithinInterval,
   parseISO,
   startOfDay,
   endOfDay,
@@ -147,16 +146,16 @@ export function filterExpenses(
 ): Expense[] {
   const interval = resolveFilterInterval(filterOrOpts);
   if (!interval) return expenses;
+  const startTime = interval.start.getTime();
+  const endTime = interval.end.getTime();
   return expenses.filter(e => {
     const d = safeExpenseDay(e.date);
     // A bounded period must contain only rows that can be placed inside it.
     // Invalid dates remain available under "All" instead of leaking into
     // Week, Month, and Year results.
     if (!d) return false;
-    return isWithinInterval(d, {
-      start: startOfDay(interval.start),
-      end: endOfDay(interval.end),
-    });
+    const time = d.getTime();
+    return time >= startTime && time <= endTime;
   });
 }
 
@@ -185,6 +184,51 @@ export function todaySpent(expenses: Expense[]): number {
       }
     })
     .reduce((sum, e) => sum + e.amount, 0);
+}
+
+/** One filtered snapshot for screens that need every analytics slice together. */
+export function summarizeExpenses(
+  expenses: Expense[],
+  filterOrOpts: TimeFilter | TimeFilterOptions,
+) {
+  const filtered = filterExpenses(expenses, filterOrOpts);
+  const categoryMap = new Map<string, number>();
+  const merchantMap = new Map<string, number>();
+  const dailyMap = new Map<string, number>();
+  let total = 0;
+
+  for (const expense of filtered) {
+    total += expense.amount;
+    categoryMap.set(
+      expense.category,
+      (categoryMap.get(expense.category) ?? 0) + expense.amount,
+    );
+    merchantMap.set(
+      expense.merchantLabel,
+      (merchantMap.get(expense.merchantLabel) ?? 0) + expense.amount,
+    );
+    const day = expense.date.split('T')[0];
+    dailyMap.set(day, (dailyMap.get(day) ?? 0) + expense.amount);
+  }
+
+  const categories = Array.from(categoryMap.entries())
+    .map(([category, amount]) => ({
+      category,
+      amount,
+      color: CATEGORY_COLORS[category] ?? '#A0A0B8',
+    }))
+    .sort((a, b) => b.amount - a.amount);
+  const merchants = Array.from(merchantMap.entries())
+    .map(([merchant, amount]) => ({ merchant, amount }))
+    .sort((a, b) => b.amount - a.amount)
+    .slice(0, 8);
+  const limit = normalizeOpts(filterOrOpts).filter === 'week' ? 7 : 31;
+  const daily = Array.from(dailyMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-limit)
+    .map(([label, value]) => ({ label: label.slice(5), value }));
+
+  return { filtered, total, categories, merchants, daily };
 }
 
 export function categoryBreakdown(

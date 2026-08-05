@@ -1,4 +1,4 @@
-import React, { useDeferredValue, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -269,6 +269,41 @@ export function HistoryScreen() {
     periodAnchor,
   ]);
 
+  const renderExpenseSectionHeader = useCallback(
+    ({ section }: { section: { title: string; total: number } }) => (
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionTitle}>{section.title}</Text>
+        <Text style={styles.sectionTotal}>{formatCurrency(section.total)}</Text>
+      </View>
+    ),
+    [styles],
+  );
+
+  const renderExpenseItem = useCallback(
+    ({ item, index }: { item: Expense; index: number }) => (
+      <View style={styles.cardWrap}>
+        <ExpenseCard
+          expense={item}
+          index={index}
+          onDelete={requestDelete}
+          onEdit={requestEdit}
+          timeOnly
+          webAccent={index % 3 === 0}
+        />
+      </View>
+    ),
+    [requestDelete, requestEdit, styles],
+  );
+
+  const renderActivityItem = useCallback(
+    ({ item, index }: { item: ActivityItem; index: number }) => (
+      <View style={styles.cardWrap}>
+        <ActivityRow item={item} index={index} styles={styles} />
+      </View>
+    ),
+    [styles],
+  );
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <SwipeScrollLockGate>
@@ -309,24 +344,8 @@ export function HistoryScreen() {
               subtitle="Try changing the search term or filter"
             />
           }
-          renderSectionHeader={({ section }) => (
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>{section.title}</Text>
-              <Text style={styles.sectionTotal}>{formatCurrency(section.total)}</Text>
-            </View>
-          )}
-          renderItem={({ item, index }: { item: Expense; index: number }) => (
-            <View style={styles.cardWrap}>
-              <ExpenseCard
-                expense={item}
-                index={index}
-                onDelete={requestDelete}
-                onEdit={requestEdit}
-                timeOnly
-                webAccent={index % 3 === 0}
-              />
-            </View>
-          )}
+          renderSectionHeader={renderExpenseSectionHeader}
+          renderItem={renderExpenseItem}
         />
       ) : (
         <FlatList
@@ -363,11 +382,7 @@ export function HistoryScreen() {
               subtitle="Adds, edits, and deletes will show up here"
             />
           }
-          renderItem={({ item, index }) => (
-            <View style={styles.cardWrap}>
-              <ActivityRow item={item} index={index} styles={styles} />
-            </View>
-          )}
+          renderItem={renderActivityItem}
         />
       )
         }
@@ -378,7 +393,7 @@ export function HistoryScreen() {
   );
 }
 
-function ActivityRow({
+const ActivityRow = React.memo(function ActivityRowComponent({
   item,
   index = 0,
   styles,
@@ -444,7 +459,7 @@ function ActivityRow({
       </Text>
     </View>
   );
-}
+});
 
 function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({

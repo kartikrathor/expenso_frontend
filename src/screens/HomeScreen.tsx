@@ -101,8 +101,14 @@ export function HomeScreen() {
   const { requestEdit, editModal } = useEditExpense();
 
   const filtered = useMemo(() => getFiltered(filter), [getFiltered, filter]);
-  const total = useMemo(() => getTotal(filter), [getTotal, filter]);
-  const monthTotal = useMemo(() => getTotal('month'), [getTotal]);
+  const total = useMemo(
+    () => filtered.reduce((sum, expense) => sum + expense.amount, 0),
+    [filtered],
+  );
+  const monthTotal = useMemo(
+    () => (filter === 'month' ? total : getTotal('month')),
+    [filter, getTotal, total],
+  );
   const todayTotal = useMemo(() => getTodayTotal(), [getTodayTotal]);
 
   // Widget / shortcut requested Add Expense
@@ -360,7 +366,7 @@ export function HomeScreen() {
   const renderItem = useCallback<ListRenderItem<Expense>>(
     ({ item, index }) => {
       const itemDay = item.date.slice(0, 10);
-      const previousDay = index > 0 ? listData[index - 1]?.date.slice(0, 10) : null;
+      const previousDay = index > 0 ? sortedExpenses[index - 1]?.date.slice(0, 10) : null;
       const showDayHeading = index === 0 || itemDay !== previousDay;
       return (
         <View>
@@ -379,7 +385,7 @@ export function HomeScreen() {
         </View>
       );
     },
-    [handleDelete, requestEdit, listData, styles],
+    [handleDelete, requestEdit, sortedExpenses, styles],
   );
 
   const keyExtractor = useCallback((item: Expense) => item.id, []);

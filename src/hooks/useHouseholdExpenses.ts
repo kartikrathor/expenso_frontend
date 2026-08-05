@@ -82,7 +82,6 @@ export function useHouseholdExpenses() {
   const localExpenses = useExpenseStore(s => s.expenses);
   const localBudget = useExpenseStore(s => s.monthlyBudget);
   const loadJoint = useJointStore(s => s.loadJoint);
-  const flushOutbox = useJointStore(s => s.flushOutbox);
   const refreshPersonal = useExpenseStore(s => s.refreshFromServer);
   const pendingCount = useJointStore(s => s.pendingCount);
   const isSyncing = useJointStore(s => s.isSyncing);
@@ -109,7 +108,6 @@ export function useHouseholdExpenses() {
       await loadJoint();
       if (useJointStore.getState().joint) {
         await syncLocalIntoJointOnce();
-        await flushOutbox();
       } else {
         await refreshPersonal();
       }
@@ -123,7 +121,7 @@ export function useHouseholdExpenses() {
     } finally {
       refreshLock.current = false;
     }
-  }, [hasUser, loadJoint, flushOutbox, refreshPersonal]);
+  }, [hasUser, loadJoint, refreshPersonal]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);

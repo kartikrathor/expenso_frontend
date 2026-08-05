@@ -78,13 +78,14 @@ interface AuthStore {
 }
 
 async function persistSession(token: string, user: AuthUser) {
-  await AsyncStorage.setItem(TOKEN_KEY, token);
-  await AsyncStorage.setItem(USER_KEY, JSON.stringify(user));
+  await AsyncStorage.setMany({
+    [TOKEN_KEY]: token,
+    [USER_KEY]: JSON.stringify(user),
+  });
 }
 
 async function clearSession() {
-  await AsyncStorage.removeItem(TOKEN_KEY);
-  await AsyncStorage.removeItem(USER_KEY);
+  await AsyncStorage.removeMany([TOKEN_KEY, USER_KEY]);
 }
 
 async function syncProFromUser(user: AuthUser | null | undefined) {
@@ -118,8 +119,9 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
 
   loadAuth: async () => {
     try {
-      const token = await AsyncStorage.getItem(TOKEN_KEY);
-      const userRaw = await AsyncStorage.getItem(USER_KEY);
+      const session = await AsyncStorage.getMany([TOKEN_KEY, USER_KEY]);
+      const token = session[TOKEN_KEY];
+      const userRaw = session[USER_KEY];
       if (token && userRaw) {
         const cachedUser = JSON.parse(userRaw) as AuthUser;
         set({ token, user: cachedUser, isLoaded: true });

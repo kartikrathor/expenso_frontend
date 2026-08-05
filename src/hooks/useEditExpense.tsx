@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 import { useExpenseStore } from '../store/expenseStore';
 import { useJointStore } from '../store/jointStore';
 import { useActivityStore } from '../store/activityStore';
+import { useCategoryStore } from '../store/categoryStore';
 import { EditExpenseModal } from '../components/EditExpenseModal';
 import { Expense, CategoryId, MerchantId } from '../types/expense';
 
@@ -47,6 +48,16 @@ export function useEditExpense() {
       await updateJointExpense(id, changes);
     } else {
       await updateExpense(id, changes);
+    }
+    if (before.category !== changes.category) {
+      await useCategoryStore.getState().learnCorrection({
+        fromCategory: before.category,
+        toCategory: changes.category,
+        merchantLabel: changes.merchantLabel,
+        note: changes.note,
+      }).catch(() => {
+        // The expense edit succeeded; learning can retry on a later edit/session refresh.
+      });
     }
     await logEdited(before, changes, source);
     setPending(null);

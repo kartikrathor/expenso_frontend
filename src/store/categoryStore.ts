@@ -23,6 +23,13 @@ interface CategoryStore {
   custom: CategoryConfig[];
   isLoaded: boolean;
   loadCategories: () => Promise<void>;
+  refreshLearnedTerms: () => Promise<void>;
+  learnCorrection: (input: {
+    fromCategory?: string;
+    toCategory: string;
+    merchantLabel: string;
+    note?: string;
+  }) => Promise<void>;
   addCustomCategory: (opts: {
     label: string;
     emoji?: string;
@@ -50,6 +57,37 @@ export const useCategoryStore = create<CategoryStore>((set, get) => ({
   all: CATEGORIES.map(c => ({ ...c, source: 'global' as const })),
   custom: [],
   isLoaded: false,
+
+  refreshLearnedTerms: async () => {
+    const token = useAuthStore.getState().token;
+    if (!token) {
+      setLearnedCategoryTerms({});
+      return;
+    }
+    const data = await apiRequest<{ terms: Record<string, string> }>('/api/categories/terms', {
+      token,
+    });
+    setLearnedCategoryTerms(data.terms || {});
+  },
+
+  learnCorrection: async input => {
+    const from = input.fromCategory?.trim().toLowerCase();
+    const to = input.toCategory.trim().toLowerCase();
+    if (!to || to === 'other' || from === to) return;
+    const token = useAuthStore.getState().token;
+    if (!token) return;
+    await apiRequest('/api/categories/learn', {
+      method: 'POST',
+      token,
+      body: {
+        fromCategory: from,
+        toCategory: to,
+        merchantLabel: input.merchantLabel,
+        note: input.note,
+      },
+    });
+    await get().refreshLearnedTerms();
+  },
 
   loadCategories: async () => {
     const token = useAuthStore.getState().token;

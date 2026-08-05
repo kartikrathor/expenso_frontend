@@ -24,6 +24,7 @@ import {
   DateRange,
   formatTimeFilterAnchor,
   isCurrentPeriod,
+  summarizeExpenses,
   TimeFilterOptions,
 } from '../utils/expenseAnalytics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -64,11 +65,6 @@ export function AnalyticsScreen() {
     monthlyBudget,
     onRefresh,
     refreshing,
-    getTotal,
-    getCategoryBreakdown,
-    getMerchantBreakdown,
-    getDailySpending,
-    getFiltered,
   } = useHouseholdExpenses();
 
   const filterOpts: TimeFilterOptions = useMemo(
@@ -76,23 +72,12 @@ export function AnalyticsScreen() {
     [filter, anchor, customRange],
   );
 
-  const total = useMemo(() => getTotal(filterOpts), [getTotal, filterOpts, expenses]);
-  const categories = useMemo(
-    () => getCategoryBreakdown(filterOpts),
-    [getCategoryBreakdown, filterOpts, expenses],
+  const summary = useMemo(
+    () => summarizeExpenses(expenses, filterOpts),
+    [expenses, filterOpts],
   );
-  const merchants = useMemo(
-    () => getMerchantBreakdown(filterOpts),
-    [getMerchantBreakdown, filterOpts, expenses],
-  );
-  const daily = useMemo(
-    () => getDailySpending(filterOpts),
-    [getDailySpending, filterOpts, expenses],
-  );
-  const expenseCount = useMemo(
-    () => getFiltered(filterOpts).length,
-    [getFiltered, filterOpts, expenses],
-  );
+  const { total, categories, merchants, daily } = summary;
+  const expenseCount = summary.filtered.length;
   const hasData = expenseCount > 0;
   const budgetPct =
     monthlyBudget > 0 && filter === 'month' && isCurrentPeriod('month', anchor)

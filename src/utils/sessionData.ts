@@ -58,5 +58,7 @@ export async function bindSessionToUser(userId: string | null) {
   await useActivityStore.getState().seedFromExpenses(expenses, joint ? 'joint' : 'local');
   if (epoch !== bindEpoch) return;
 
-  await preloadAskChatHistory(userId);
+  preloadAskChatHistory(userId).catch(() => {
+    // Ask loads its cache on demand too; preload must not delay app startup.
+  });
 }

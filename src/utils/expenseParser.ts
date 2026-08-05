@@ -231,13 +231,18 @@ export function setLearnedCategoryTerms(map: Record<string, string>) {
     .sort((a, b) => b.term.length - a.term.length);
 }
 
-function detectCategoryFromKeywords(text: string): CategoryId | null {
+function detectLearnedCategory(text: string): CategoryId | null {
   const lower = text.toLowerCase();
-
   for (const { term, category } of learnedTerms) {
     if (lower.includes(term)) return category;
   }
+  return null;
+}
 
+function detectCategoryFromKeywords(text: string): CategoryId | null {
+  const learned = detectLearnedCategory(text);
+  if (learned) return learned;
+  const lower = text.toLowerCase();
   for (const { keywords, category } of CATEGORY_KEYWORDS) {
     if (keywords.some(k => lower.includes(k))) return category;
   }
@@ -246,6 +251,7 @@ function detectCategoryFromKeywords(text: string): CategoryId | null {
 
 function detectMerchant(text: string): { id: MerchantId; label: string; category: CategoryId } {
   let normalized = text.toLowerCase();
+  const learnedCategory = detectLearnedCategory(text);
   for (const [alias, id] of Object.entries(MERCHANT_ALIASES)) {
     if (normalized.includes(alias)) normalized = normalized.replace(alias, id);
   }
@@ -254,7 +260,11 @@ function detectMerchant(text: string): { id: MerchantId; label: string; category
   for (const merchant of catalog) {
     for (const keyword of merchant.keywords) {
       if (normalized.includes(keyword.toLowerCase())) {
-        return { id: merchant.id, label: merchant.label, category: merchant.category };
+        return {
+          id: merchant.id,
+          label: merchant.label,
+          category: learnedCategory ?? merchant.category,
+        };
       }
     }
   }

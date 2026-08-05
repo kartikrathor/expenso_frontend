@@ -19,6 +19,9 @@ function budgetKey(userId: string) {
 function uploadedIdsKey(userId: string) {
   return `@expensewise_personal_uploaded_ids_${userId}`;
 }
+function duplicateCleanupKey(userId: string) {
+  return `@expensewise_personal_dedupe_done_${userId}`;
+}
 
 const LEGACY_EXPENSES_KEY = '@expensewise_expenses';
 const LEGACY_BUDGET_KEY = '@expensewise_budget';
@@ -134,8 +137,10 @@ const personalSyncInFlight = new Map<string, Promise<number>>();
 const duplicateCleanupDone = new Set<string>();
 
 async function writePersistJob(job: { userId: string; expenses: Expense[]; budget: number }) {
-  await AsyncStorage.setItem(expensesKey(job.userId), JSON.stringify(job.expenses));
-  await AsyncStorage.setItem(budgetKey(job.userId), String(job.budget));
+  await AsyncStorage.setMany({
+    [expensesKey(job.userId)]: JSON.stringify(job.expenses),
+    [budgetKey(job.userId)]: String(job.budget),
+  });
 }
 
 /** Flush any pending cache write immediately (critical before logout / account switch). */
@@ -158,8 +163,11 @@ async function persistCacheNow(userId: string | null, expenses: Expense[], budge
 
 async function readCache(userId: string): Promise<{ expenses: Expense[]; monthlyBudget: number }> {
   try {
-    const raw = await AsyncStorage.getItem(expensesKey(userId));
-    const budgetRaw = await AsyncStorage.getItem(budgetKey(userId));
+    const expenseCacheKey = expensesKey(userId);
+    const userBudgetKey = budgetKey(userId);
+    const entries = await AsyncStorage.getMany([expenseCacheKey, userBudgetKey]);
+    const raw = entries[expenseCacheKey];
+    const budgetRaw = entries[userBudgetKey];
     return {
       expenses: raw ? JSON.parse(raw) : [],
       monthlyBudget: budgetRaw ? parseFloat(budgetRaw) || 0 : 0,
@@ -196,7 +204,11 @@ async function collectLocalCandidates(userId: string): Promise<{
 
   let legacyBudget = 0;
   try {
-    const legacyRaw = await AsyncStorage.getItem(LEGACY_EXPENSES_KEY);
+    const legacyEntries = await AsyncStorage.getMany([
+      LEGACY_EXPENSES_KEY,
+      LEGACY_BUDGET_KEY,
+    ]);
+    const legacyRaw = legacyEntries[LEGACY_EXPENSES_KEY];
     if (legacyRaw) {
       const list: Expense[] = JSON.parse(legacyRaw);
       for (const e of list) {
@@ -204,7 +216,7 @@ async function collectLocalCandidates(userId: string): Promise<{
         if (!byFp.has(fp)) byFp.set(fp, e);
       }
     }
-    const lb = await AsyncStorage.getItem(LEGACY_BUDGET_KEY);
+    const lb = legacyEntries[LEGACY_BUDGET_KEY];
     if (lb) legacyBudget = parseFloat(lb) || 0;
   } catch {
     /* ignore bad legacy */
@@ -233,26 +245,20 @@ async function syncLocalCacheToServerOnce(userId: string, token: string): Promis
   }
   const uploaded = new Set(uploadedIds);
 
-  const remote = await apiRequest<{ expenses: ServerExpense[] }>('/api/expenses', { token });
-  const remoteList = dedupeServerExpenses(remote.expenses || []);
-  const remoteIds = new Set(remoteList.map(e => e._id));
-  const remoteFps = new Set(remoteList.map(e => expenseFingerprint(toExpense(e))));
+  const pendingLocal = local.expenses.filter(
+    expense => isLocalOnlyId(expense.id) && !uploaded.has(expense.id),
+  );
+  let remoteFps = new Set<string>();
+  // The remote list is needed only to migrate local-only rows. On the normal
+  // path loadForUser/refresh performs the single authoritative pull below.
+  if (pendingLocal.length > 0) {
+    const remote = await apiRequest<{ expenses: ServerExpense[] }>('/api/expenses', { token });
+    remoteFps = new Set(
+      dedupeServerExpenses(remote.expenses || []).map(e => expenseFingerprint(toExpense(e))),
+    );
+  }
 
-  for (const e of local.expenses) {
-    if (uploaded.has(e.id)) continue;
-
-    // Already on server under this id
-    if (!isLocalOnlyId(e.id) && remoteIds.has(e.id)) {
-      uploaded.add(e.id);
-      continue;
-    }
-
-    // Mongo id missing remotely → deleted on server; never resurrect
-    if (!isLocalOnlyId(e.id)) {
-      uploaded.add(e.id);
-      continue;
-    }
-
+  for (const e of pendingLocal) {
     const fp = expenseFingerprint(e);
     if (remoteFps.has(fp)) {
       uploaded.add(e.id);
@@ -317,7 +323,11 @@ async function syncLocalCacheToServer(userId: string, token: string): Promise<nu
   const task = (async () => {
     if (!duplicateCleanupDone.has(userId)) {
       try {
-        await apiRequest('/api/expenses/dedupe', { method: 'POST', token });
+        const alreadyCleaned = await AsyncStorage.getItem(duplicateCleanupKey(userId));
+        if (alreadyCleaned !== '1') {
+          await apiRequest('/api/expenses/dedupe', { method: 'POST', token });
+          await AsyncStorage.setItem(duplicateCleanupKey(userId), '1');
+        }
         duplicateCleanupDone.add(userId);
       } catch {
         // Older/offline backend: the client-side exact dedupe still protects the UI.

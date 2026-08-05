@@ -79,6 +79,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
   const [selectedMerchant, setSelectedMerchant] = useState<MerchantId>('default');
   const [selectedCategory, setSelectedCategory] = useState<CategoryId>('other');
   const [parsed, setParsed] = useState<ReturnType<typeof parseExpenseText> | null>(null);
+  const [inferredCategory, setInferredCategory] = useState<CategoryId | null>(null);
   const [newCategoryLabel, setNewCategoryLabel] = useState('');
   const [addingCategory, setAddingCategory] = useState(false);
   const [pickedEmoji, setPickedEmoji] = useState('✨');
@@ -94,6 +95,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
   const deleteCustomCategory = useCategoryStore(s => s.deleteCustomCategory);
   const fetchIconSuggestions = useCategoryStore(s => s.fetchIconSuggestions);
   const loadCategories = useCategoryStore(s => s.loadCategories);
+  const learnCorrection = useCategoryStore(s => s.learnCorrection);
   const merchantOptions = useMerchantStore(s => s.all);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -111,6 +113,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
     setSelectedMerchant('default');
     setSelectedCategory('other');
     setParsed(null);
+    setInferredCategory(null);
     setNewCategoryLabel('');
     setPickedEmoji('✨');
     setPickedIconUrl('');
@@ -171,7 +174,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
     return () => {
       if (suggestTimer.current) clearTimeout(suggestTimer.current);
     };
-  }, [newCategoryLabel, fetchIconSuggestions]);
+  }, [newCategoryLabel, fetchIconSuggestions, pickedEmoji, pickedIconUrl]);
 
   const handleDeleteCustom = (slug: string, label: string) => {
     showAlert(
@@ -272,9 +275,14 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
     setSmartInput(text);
     const result = parseExpenseText(text);
     setMerchantName(text.trim() ? result.merchantLabel : '');
-    if (result.merchant !== 'default') {
+    if (text.trim()) {
       setSelectedMerchant(result.merchant);
       setSelectedCategory(result.category);
+      setInferredCategory(result.category);
+    } else {
+      setSelectedMerchant('default');
+      setSelectedCategory('other');
+      setInferredCategory(null);
     }
     if (result.amount) setAmount(String(result.amount));
   };
@@ -282,9 +290,12 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
   const handleSmartSubmit = () => {
     const result = parseExpenseText(smartInput);
     if (result.amount) {
+      setInferredCategory(result.category);
       goToConfirm(result);
     } else if (amount) {
-      goToConfirm(parseExpenseText(`${smartInput} ${amount}`.trim()));
+      const withAmount = parseExpenseText(`${smartInput} ${amount}`.trim());
+      setInferredCategory(withAmount.category);
+      goToConfirm(withAmount);
     } else {
       showAlert('Amount Required', 'Please enter an amount, e.g. "Blinkit 200"', undefined, '⚠️');
     }
@@ -292,6 +303,7 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
 
   const handleVoiceResult = (text: string) => {
     const result = parseExpenseText(text);
+    setInferredCategory(result.category);
     if (result.amount) {
       goToConfirm({ ...result, note: text });
     } else {
@@ -329,6 +341,16 @@ export function AddExpenseModal({ visible, onClose, onSave }: AddExpenseModalPro
         inputMethod: tab === 'voice' ? 'voice' : 'manual',
         date: expenseDate,
       });
+      if (inferredCategory && inferredCategory !== parsed.category) {
+        await learnCorrection({
+          fromCategory: inferredCategory,
+          toCategory: parsed.category,
+          merchantLabel: parsed.merchantLabel,
+          note: parsed.note,
+        }).catch(() => {
+          // Saving succeeded; category learning is non-blocking.
+        });
+      }
       const savedDay = new Date(expenseDate);
       const today = new Date();
       savedDay.setHours(0, 0, 0, 0);

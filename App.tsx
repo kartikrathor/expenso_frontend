@@ -58,12 +58,6 @@ function AppContent() {
     loadAuth();
   }, [loadTheme, loadAppIcon, loadPro, loadAuth]);
 
-  useEffect(() => {
-    if (!isAuthLoaded || !token) return;
-    // Login/register already apply Pro from /auth response; this reconfirms via /api/pro/me.
-    void useProStore.getState().refreshEntitlement();
-  }, [isAuthLoaded, token, user?.id]);
-
   // Widget / shortcut deep link → open Add Expense (survives lock / loading)
   useEffect(() => startAddExpenseLinking(), []);
 
@@ -75,13 +69,14 @@ function AppContent() {
     (async () => {
       try {
         if (user?.id) {
-          await bindSessionToUser(user.id);
-          await loadAppLock(user.id);
-          await loadInbox(user.id);
+          await Promise.all([
+            bindSessionToUser(user.id),
+            loadAppLock(user.id),
+            loadInbox(user.id),
+          ]);
         } else {
-          await clearSessionStores();
-          await loadAppLock(null);
-          await loadInbox(null);
+          // clearSessionStores also clears the notification inbox.
+          await Promise.all([clearSessionStores(), loadAppLock(null)]);
         }
       } finally {
         if (!cancelled) setSessionReady(true);

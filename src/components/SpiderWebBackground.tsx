@@ -120,7 +120,7 @@ interface SpiderWebBackgroundProps {
  * Corner geometric webs. Variants change which corners, ray/ring density,
  * and scale — so stacked cards don’t share the same pattern.
  */
-export function SpiderWebBackground({
+export const SpiderWebBackground = React.memo(function SpiderWebBackgroundComponent({
   style,
   enabled,
   opacity = 0.3,
@@ -173,7 +173,7 @@ export function SpiderWebBackground({
       })}
     </View>
   );
-}
+});
 
 function CornerWeb({
   size,
