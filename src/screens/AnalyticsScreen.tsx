@@ -23,7 +23,6 @@ import { TimeFilter } from '../types/expense';
 import {
   DateRange,
   formatTimeFilterAnchor,
-  isCurrentPeriod,
   summarizeExpenses,
   TimeFilterOptions,
 } from '../utils/expenseAnalytics';
@@ -62,7 +61,7 @@ export function AnalyticsScreen() {
   const {
     isJoint,
     expenses,
-    monthlyBudget,
+    getBudgetForMonth,
     onRefresh,
     refreshing,
   } = useHouseholdExpenses();
@@ -79,9 +78,10 @@ export function AnalyticsScreen() {
   const { total, categories, merchants, daily } = summary;
   const expenseCount = summary.filtered.length;
   const hasData = expenseCount > 0;
+  const selectedMonthBudget = filter === 'month' ? getBudgetForMonth(anchor) : 0;
   const budgetPct =
-    monthlyBudget > 0 && filter === 'month' && isCurrentPeriod('month', anchor)
-      ? Math.min(999, Math.round((total / monthlyBudget) * 100))
+    selectedMonthBudget > 0
+      ? Math.min(999, Math.round((total / selectedMonthBudget) * 100))
       : null;
 
   const periodCaption = useMemo(() => {

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from 'react';
 import {
   View,
   Text,
@@ -12,10 +12,12 @@ import {
   RefreshControl,
   ListRenderItem,
   ActivityIndicator,
+  Switch,
 } from 'react-native';
 import Animated, { useAnimatedStyle, withSpring, useSharedValue } from 'react-native-reanimated';
 import { WaterGradient } from '../components/WaterGradient';
 import LinearGradient from 'react-native-linear-gradient';
+import Svg, { Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused } from '@react-navigation/native';
 import { useExpenseStore } from '../store/expenseStore';
@@ -46,23 +48,82 @@ import { useAddExpenseNavStore } from '../store/addExpenseNavStore';
 import { useDeleteExpense } from '../hooks/useDeleteExpense';
 import { useEditExpense } from '../hooks/useEditExpense';
 import { Expense, TimeFilter, MerchantId } from '../types/expense';
-import { format } from 'date-fns';
-import { formatExpenseDayLabel } from '../utils/expenseDate';
+import { format, parseISO, startOfWeek } from 'date-fns';
+import {
+  applyCalendarDay,
+  formatExpenseDayLabel,
+  formatPeriodAnchor,
+} from '../utils/expenseDate';
+import {
+  formatTimeFilterAnchor,
+  shiftTimeFilterAnchor,
+} from '../utils/expenseAnalytics';
+import { ExpenseDatePicker } from '../components/ExpenseDatePicker';
+import { monthKey } from '../utils/monthlyBudget';
 
-const FILTERS: { key: TimeFilter; label: string }[] = [
+type HomeFilter = TimeFilter | 'day';
+
+const FILTERS: { key: HomeFilter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'day', label: 'Day' },
   { key: 'week', label: 'Week' },
   { key: 'month', label: 'Month' },
   { key: 'year', label: 'Year' },
-  { key: 'all', label: 'All' },
 ];
 
 /** First paint + each scroll page on Home */
 const HOME_PAGE_SIZE = 25;
 
+function periodBucketKey(filter: Exclude<HomeFilter, 'all'>, date: Date): string {
+  if (filter === 'day') return format(date, 'yyyy-MM-dd');
+  if (filter === 'week') {
+    return format(startOfWeek(date, { weekStartsOn: 1 }), 'yyyy-MM-dd');
+  }
+  if (filter === 'month') return format(date, 'yyyy-MM');
+  return format(date, 'yyyy');
+}
+
 function firstName(full?: string | null) {
   const n = (full || '').trim();
   if (!n) return '';
   return n.split(/\s+/)[0];
+}
+
+function SearchGlyph({ color, close = false }: { color: string; close?: boolean }) {
+  return (
+    <Svg width={19} height={19} viewBox="0 0 24 24" fill="none">
+      {close ? (
+        <Path
+          d="M6 6l12 12M18 6L6 18"
+          stroke={color}
+          strokeWidth={2}
+          strokeLinecap="round"
+        />
+      ) : (
+        <>
+          <Path
+            d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14Z"
+            stroke={color}
+            strokeWidth={2}
+          />
+          <Path
+            d="m16.2 16.2 4.3 4.3"
+            stroke={color}
+            strokeWidth={2}
+            strokeLinecap="round"
+          />
+        </>
+      )}
+    </Svg>
+  );
+}
+
+function FilterGlyph({ color }: { color: string }) {
+  return (
+    <Svg width={19} height={19} viewBox="0 0 24 24" fill="none">
+      <Path d="M4 6h16M7 12h10M10 18h4" stroke={color} strokeWidth={2} strokeLinecap="round" />
+    </Svg>
+  );
 }
 
 export function HomeScreen() {
@@ -73,14 +134,26 @@ export function HomeScreen() {
   const userName = useAuthStore(s => s.user?.name);
   const greetName = firstName(userName);
 
-  const [filter, setFilter] = useState<TimeFilter>('month');
+  const [filter, setFilter] = useState<HomeFilter>('month');
+  const [periodAnchor, setPeriodAnchor] = useState(() => new Date());
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [isApplyingFilter, setIsApplyingFilter] = useState(false);
+  const [draftFilter, setDraftFilter] = useState<HomeFilter>('month');
+  const [draftPeriodAnchor, setDraftPeriodAnchor] = useState(() => new Date());
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const deferredSearch = useDeferredValue(search.trim().toLowerCase());
   const [visibleCount, setVisibleCount] = useState(HOME_PAGE_SIZE);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const listRef = useRef<FlatList<Expense>>(null);
+  const searchYRef = useRef(0);
+  const searchFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadingMoreRef = useRef(false);
   const loadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [showBudget, setShowBudget] = useState(false);
   const [budgetInput, setBudgetInput] = useState('');
+  const [budgetRepeat, setBudgetRepeat] = useState(false);
   const [toast, setToast] = useState<{ amount: number; merchant: MerchantId; label: string } | null>(null);
   const [notifOpen, setNotifOpen] = useState(false);
   const [dripBurst, setDripBurst] = useState(0);
@@ -92,22 +165,73 @@ export function HomeScreen() {
   const openAddFromWidget = useAddExpenseNavStore(s => s.openAdd);
   const clearOpenAdd = useAddExpenseNavStore(s => s.clearOpenAdd);
 
-  const { isJoint, joint, expenses: householdExpenses, getFiltered, getTotal, getTodayTotal, monthlyBudget, setMonthlyBudget, onRefresh, refreshing, pendingCount, isSyncing } =
-    useHouseholdExpenses();
+  const {
+    isJoint,
+    joint,
+    expenses: householdExpenses,
+    getTodayTotal,
+    getBudgetForMonth,
+    repeatMonthlyBudget,
+    setMonthlyBudget,
+    onRefresh,
+    refreshing,
+    pendingCount,
+    isSyncing,
+  } = useHouseholdExpenses();
   const addJointExpense = useJointStore(s => s.addJointExpense);
 
   const addExpense = useExpenseStore(s => s.addExpense);
   const { requestDelete, deleteModal } = useDeleteExpense();
   const { requestEdit, editModal } = useEditExpense();
 
-  const filtered = useMemo(() => getFiltered(filter), [getFiltered, filter]);
+  const periodBuckets = useMemo(() => {
+    const buckets: Record<Exclude<HomeFilter, 'all'>, Map<string, Expense[]>> = {
+      day: new Map(),
+      week: new Map(),
+      month: new Map(),
+      year: new Map(),
+    };
+    householdExpenses.forEach(expense => {
+      try {
+        const date = parseISO(expense.date);
+        if (Number.isNaN(date.getTime())) return;
+        (['day', 'week', 'month', 'year'] as const).forEach(period => {
+          const key = periodBucketKey(period, date);
+          const existing = buckets[period].get(key);
+          if (existing) existing.push(expense);
+          else buckets[period].set(key, [expense]);
+        });
+      } catch {
+        // Invalid dates remain available under All.
+      }
+    });
+    return buckets;
+  }, [householdExpenses]);
+
+  const filtered = useMemo(() => {
+    if (filter === 'all') return householdExpenses;
+    return periodBuckets[filter].get(periodBucketKey(filter, periodAnchor)) ?? [];
+  }, [filter, householdExpenses, periodAnchor, periodBuckets]);
+  const displayedExpenses = useMemo(() => {
+    if (!deferredSearch) return filtered;
+    return householdExpenses.filter(expense => (
+      expense.merchantLabel.toLowerCase().includes(deferredSearch) ||
+      expense.note.toLowerCase().includes(deferredSearch) ||
+      expense.amount.toString().includes(deferredSearch)
+    ));
+  }, [deferredSearch, filtered, householdExpenses]);
   const total = useMemo(
-    () => filtered.reduce((sum, expense) => sum + expense.amount, 0),
-    [filtered],
+    () => displayedExpenses.reduce((sum, expense) => sum + expense.amount, 0),
+    [displayedExpenses],
   );
+  const budgetMonthDate = filter === 'month' ? periodAnchor : new Date();
+  const budgetMonthKey = monthKey(budgetMonthDate);
+  const budgetMonthLabel = format(budgetMonthDate, 'MMMM yyyy');
+  const budgetAmount = getBudgetForMonth(budgetMonthKey);
   const monthTotal = useMemo(
-    () => (filter === 'month' ? total : getTotal('month')),
-    [filter, getTotal, total],
+    () => (periodBuckets.month.get(budgetMonthKey) ?? [])
+      .reduce((sum, expense) => sum + expense.amount, 0),
+    [budgetMonthKey, periodBuckets],
   );
   const todayTotal = useMemo(() => getTodayTotal(), [getTodayTotal]);
 
@@ -142,23 +266,23 @@ export function HomeScreen() {
     });
   }, [onRefresh]);
 
-  // Newest-first list for the filter; UI pages this so Home doesn't mount every card at once.
+  // Newest-first list for the filter/search; UI pages this so Home doesn't mount every card at once.
   const sortedExpenses = useMemo(() => {
-    if (filtered.length <= 1) return filtered;
+    if (displayedExpenses.length <= 1) return displayedExpenses;
     let needsSort = false;
-    for (let i = 1; i < Math.min(filtered.length, 8); i++) {
-      const a = Date.parse(filtered[i - 1].date) || 0;
-      const b = Date.parse(filtered[i].date) || 0;
+    for (let i = 1; i < Math.min(displayedExpenses.length, 8); i++) {
+      const a = Date.parse(displayedExpenses[i - 1].date) || 0;
+      const b = Date.parse(displayedExpenses[i].date) || 0;
       if (a < b) {
         needsSort = true;
         break;
       }
     }
-    if (!needsSort) return filtered;
-    return [...filtered].sort(
+    if (!needsSort) return displayedExpenses;
+    return [...displayedExpenses].sort(
       (a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0),
     );
-  }, [filtered]);
+  }, [displayedExpenses]);
 
   useEffect(() => {
     if (loadMoreTimerRef.current) {
@@ -171,7 +295,11 @@ export function HomeScreen() {
     return () => {
       if (loadMoreTimerRef.current) clearTimeout(loadMoreTimerRef.current);
     };
-  }, [filter]);
+  }, [deferredSearch, filter, periodAnchor]);
+
+  useEffect(() => () => {
+    if (searchFocusTimerRef.current) clearTimeout(searchFocusTimerRef.current);
+  }, []);
 
   const listData = useMemo(
     () => sortedExpenses.slice(0, visibleCount),
@@ -193,10 +321,10 @@ export function HomeScreen() {
   }, [hasMore, sortedExpenses.length]);
 
   const waterFill = useMemo(() => {
-    if (monthlyBudget <= 0) return 0.58;
-    const remaining = Math.max(0, monthlyBudget - monthTotal);
-    return Math.max(0, Math.min(1, remaining / monthlyBudget));
-  }, [monthlyBudget, monthTotal]);
+    if (budgetAmount <= 0) return 0.58;
+    const remaining = Math.max(0, budgetAmount - monthTotal);
+    return Math.max(0, Math.min(1, remaining / budgetAmount));
+  }, [budgetAmount, monthTotal]);
 
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -228,20 +356,23 @@ export function HomeScreen() {
   }));
 
   const filterLabel =
-    filter === 'month' ? 'This Month'
-      : filter === 'week' ? 'This Week'
-        : filter === 'year' ? 'This Year'
-          : 'All Time';
+    deferredSearch ? 'All Time Search'
+      : filter === 'day' ? formatPeriodAnchor('day', periodAnchor)
+      : filter === 'all' ? 'All Time'
+      : formatTimeFilterAnchor(filter, periodAnchor);
   const listTitle =
-    filter === 'week' ? 'This week’s expenses'
-      : filter === 'month' ? 'This month’s expenses'
-        : filter === 'year' ? 'This year’s expenses'
+    deferredSearch ? 'Search results'
+      : filter === 'day' ? 'Selected day’s expenses'
+      : filter === 'week' ? 'Selected week’s expenses'
+      : filter === 'month' ? 'Selected month’s expenses'
+        : filter === 'year' ? 'Selected year’s expenses'
           : 'All expenses';
 
   const openBudget = useCallback(() => {
-    setBudgetInput(monthlyBudget > 0 ? String(monthlyBudget) : '');
+    setBudgetInput(budgetAmount > 0 ? String(budgetAmount) : '');
+    setBudgetRepeat(repeatMonthlyBudget);
     setShowBudget(true);
-  }, [monthlyBudget]);
+  }, [budgetAmount, repeatMonthlyBudget]);
 
   const ListHeader = useMemo(() => (
     <View>
@@ -303,7 +434,7 @@ export function HomeScreen() {
             <View style={styles.heroDivider} />
             <View style={styles.heroStat}>
               <Text style={styles.heroStatLabel}>Transactions</Text>
-              <Text style={styles.heroStatValue}>{filtered.length}</Text>
+              <Text style={styles.heroStatValue}>{displayedExpenses.length}</Text>
             </View>
           </View>
         </WaterGradient>
@@ -311,36 +442,87 @@ export function HomeScreen() {
 
       <BudgetProgress
         spent={monthTotal}
-        budget={monthlyBudget}
+        budget={budgetAmount}
+        monthLabel={budgetMonthLabel}
         onSetBudget={openBudget}
       />
 
       <QuickAddBar onPress={() => setShowAdd(true)} />
 
-      <View style={styles.filterRow}>
-        {FILTERS.map(f => (
-          <Pressable
-            key={f.key}
-            style={[styles.filterChip, filter === f.key && styles.filterChipActive]}
-            onPress={() => setFilter(f.key)}
-          >
-            <Text style={[styles.filterText, filter === f.key && styles.filterTextActive]}>
-              {f.label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-
       <View style={styles.sectionHeading}>
         <View>
           <Text style={styles.sectionTitle}>{listTitle}</Text>
           <Text style={styles.sectionHint}>
-            {filtered.length} transaction{filtered.length === 1 ? '' : 's'}
+            {displayedExpenses.length} transaction{displayedExpenses.length === 1 ? '' : 's'}
             {isJoint ? ' · shared account' : ''}
           </Text>
         </View>
-        <Text style={styles.periodPill}>{filterLabel}</Text>
+        <View style={styles.sectionActions}>
+          <Pressable
+            style={[styles.sectionFilterBtn, searchOpen && styles.sectionFilterBtnActive]}
+            onPress={() => {
+              setSearchOpen(open => {
+                if (open) setSearch('');
+                return !open;
+              });
+            }}
+            hitSlop={6}
+            accessibilityLabel={searchOpen ? 'Close expense search' : 'Search all expenses'}
+          >
+            <SearchGlyph color={colors.primaryLight} close={searchOpen} />
+          </Pressable>
+          <Pressable
+            style={[styles.sectionFilterBtn, filterOpen && styles.sectionFilterBtnActive]}
+            onPress={() => {
+              setDraftFilter(filter);
+              setDraftPeriodAnchor(periodAnchor);
+              setIsApplyingFilter(false);
+              setFilterOpen(true);
+            }}
+            hitSlop={6}
+            accessibilityLabel={`Filter expenses, currently ${filterLabel}`}
+          >
+            <FilterGlyph color={colors.primaryLight} />
+          </Pressable>
+        </View>
       </View>
+
+      {searchOpen ? (
+        <View
+          style={styles.searchBox}
+          onLayout={event => {
+            searchYRef.current = event.nativeEvent.layout.y;
+          }}
+        >
+          <View style={styles.searchIcon}>
+            <SearchGlyph color={colors.textMuted} />
+          </View>
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search all merchants, notes, amounts..."
+            placeholderTextColor={colors.textMuted}
+            value={search}
+            onChangeText={setSearch}
+            onFocus={() => {
+              if (searchFocusTimerRef.current) clearTimeout(searchFocusTimerRef.current);
+              searchFocusTimerRef.current = setTimeout(() => {
+                listRef.current?.scrollToOffset({
+                  offset: Math.max(0, searchYRef.current - Spacing.lg),
+                  animated: true,
+                });
+                searchFocusTimerRef.current = null;
+              }, 120);
+            }}
+            autoFocus
+            returnKeyType="search"
+          />
+          {search.length > 0 ? (
+            <Pressable onPress={() => setSearch('')} hitSlop={6}>
+              <Text style={styles.clearBtn}>✕</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   ), [
     styles,
@@ -354,11 +536,18 @@ export function HomeScreen() {
     filterLabel,
     total,
     todayTotal,
-    filtered.length,
+    displayedExpenses.length,
     monthTotal,
-    monthlyBudget,
+    budgetAmount,
+    budgetMonthLabel,
     openBudget,
     filter,
+    periodAnchor,
+    filterOpen,
+    searchOpen,
+    search,
+    colors.textMuted,
+    colors.primaryLight,
     listTitle,
     isFocused,
   ]);
@@ -401,21 +590,25 @@ export function HomeScreen() {
         </LinearGradient>
       }
       title={
-        householdExpenses.length > 0
+        deferredSearch
+          ? 'No matching expenses'
+          : householdExpenses.length > 0
           ? 'No expenses in this period'
           : isJoint
             ? 'Add a shared expense'
             : 'Add your first expense'
       }
       subtitle={
-        householdExpenses.length > 0
+        deferredSearch
+          ? 'Try another merchant, note, or amount'
+          : householdExpenses.length > 0
           ? 'Try Week, Month, Year, or All — or pull down to refresh'
           : isJoint
             ? 'Both partners can add here — it syncs for both of you'
             : 'In the Quick tab, type "Blinkit 200" or speak via the mic'
       }
     />
-  ), [actionGradient, styles.emptyIcon, isJoint, householdExpenses.length, colors.gradientStart]);
+  ), [actionGradient, styles.emptyIcon, isJoint, householdExpenses.length, colors.gradientStart, deferredSearch]);
 
   const ListFooter = useMemo(() => {
     if (listData.length === 0 || (!hasMore && !isLoadingMore)) return null;
@@ -456,6 +649,7 @@ export function HomeScreen() {
         {(scrollProps) => (
           <FlatList
             {...scrollProps}
+            ref={listRef}
             data={listData}
             keyExtractor={keyExtractor}
             renderItem={renderItem}
@@ -463,6 +657,9 @@ export function HomeScreen() {
             ListEmptyComponent={ListEmpty}
             ListFooterComponent={ListFooter}
             showsVerticalScrollIndicator={false}
+            automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad + 72 }]}
             initialNumToRender={HOME_PAGE_SIZE}
             maxToRenderPerBatch={10}
@@ -527,6 +724,122 @@ export function HomeScreen() {
       {deleteModal}
       {editModal}
 
+      <Modal
+        visible={filterOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFilterOpen(false)}
+      >
+        <View style={[styles.filterOverlay, { backgroundColor: colors.overlay }]}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setFilterOpen(false)} />
+          <Pressable style={styles.filterSheet} onPress={event => event.stopPropagation()}>
+            <View style={styles.filterSheetHeader}>
+              <View>
+                <Text style={styles.filterSheetTitle}>Filter expenses</Text>
+                <Text style={styles.filterSheetHint}>View expenses by date or period</Text>
+              </View>
+              <Pressable
+                style={styles.filterCloseBtn}
+                onPress={() => setFilterOpen(false)}
+                accessibilityLabel="Close filters"
+              >
+                <SearchGlyph color={colors.textSecondary} close />
+              </Pressable>
+            </View>
+
+            <Text style={styles.filterSectionLabel}>PERIOD</Text>
+            <View style={styles.filterOptions}>
+              {FILTERS.map(option => (
+                <Pressable
+                  key={option.key}
+                  style={[
+                    styles.filterOption,
+                    draftFilter === option.key && styles.filterOptionActive,
+                  ]}
+                  onPress={() => setDraftFilter(option.key)}
+                >
+                  <View
+                    style={[
+                      styles.filterOptionDot,
+                      draftFilter === option.key && styles.filterOptionDotActive,
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.filterOptionText,
+                      draftFilter === option.key && styles.filterOptionTextActive,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {draftFilter === 'day' ? (
+              <ExpenseDatePicker
+                valueIso={applyCalendarDay(draftPeriodAnchor)}
+                onChange={iso => setDraftPeriodAnchor(parseISO(iso))}
+                label="Select date"
+              />
+            ) : draftFilter !== 'all' ? (
+              <View style={styles.filterPeriodNav}>
+                <Pressable
+                  style={styles.filterPeriodBtn}
+                  onPress={() => setDraftPeriodAnchor(
+                    anchor => shiftTimeFilterAnchor(draftFilter, anchor, -1),
+                  )}
+                  accessibilityLabel={`Previous ${draftFilter}`}
+                >
+                  <Text style={styles.filterPeriodArrow}>‹</Text>
+                </Pressable>
+                <Text style={styles.filterPeriodLabel}>
+                  {formatTimeFilterAnchor(draftFilter, draftPeriodAnchor)}
+                </Text>
+                <Pressable
+                  style={styles.filterPeriodBtn}
+                  onPress={() => setDraftPeriodAnchor(
+                    anchor => shiftTimeFilterAnchor(draftFilter, anchor, 1),
+                  )}
+                  accessibilityLabel={`Next ${draftFilter}`}
+                >
+                  <Text style={styles.filterPeriodArrow}>›</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
+            <Pressable
+              style={[
+                styles.filterApplyBtn,
+                isApplyingFilter && styles.filterApplyBtnDisabled,
+              ]}
+              disabled={isApplyingFilter}
+              onPress={() => {
+                if (isApplyingFilter) return;
+                setIsApplyingFilter(true);
+                requestAnimationFrame(() => {
+                  setFilter(draftFilter);
+                  setPeriodAnchor(draftPeriodAnchor);
+                  requestAnimationFrame(() => {
+                    setFilterOpen(false);
+                    setIsApplyingFilter(false);
+                  });
+                });
+              }}
+            >
+              {isApplyingFilter ? (
+                <View style={styles.filterApplyingRow}>
+                  <ActivityIndicator size="small" color="#FFF" />
+                  <Text style={styles.filterApplyText}>Applying…</Text>
+                </View>
+              ) : (
+                <Text style={styles.filterApplyText}>Apply filter</Text>
+              )}
+            </Pressable>
+          </Pressable>
+        </View>
+      </Modal>
+
       <Modal visible={showBudget} transparent animationType="fade">
         <KeyboardAvoidingView
           style={[styles.budgetOverlay, { backgroundColor: colors.overlay }]}
@@ -537,11 +850,12 @@ export function HomeScreen() {
             <Text style={styles.budgetTitle}>
               {isJoint ? 'Shared Monthly Budget' : 'Monthly Budget'}
             </Text>
-            {isJoint && (
-              <Text style={[styles.date, { marginBottom: Spacing.sm }]}>
-                Same for both partners · changing updates both
-              </Text>
-            )}
+            <Text style={styles.budgetMonth}>{budgetMonthLabel}</Text>
+            <Text style={styles.budgetHint}>
+              {isJoint
+                ? 'Shared with your partner · changes update both'
+                : 'Set your spending limit for this month'}
+            </Text>
             <TextInput
               style={styles.budgetInput}
               value={budgetInput}
@@ -551,11 +865,23 @@ export function HomeScreen() {
               placeholderTextColor={colors.textMuted}
               autoFocus
             />
+            <View style={styles.budgetRepeatRow}>
+              <Text style={styles.budgetRepeatText}>
+                Use the same budget automatically for future months
+              </Text>
+              <Switch
+                value={budgetRepeat}
+                onValueChange={setBudgetRepeat}
+                trackColor={{ false: colors.border, true: colors.primary + '88' }}
+                thumbColor={budgetRepeat ? colors.primaryLight : colors.textMuted}
+                accessibilityLabel="Use the same budget automatically for future months"
+              />
+            </View>
             <Pressable
               style={styles.budgetSave}
               onPress={async () => {
                 const val = parseFloat(budgetInput);
-                if (val > 0) await setMonthlyBudget(val);
+                if (val > 0) await setMonthlyBudget(val, budgetMonthKey, budgetRepeat);
                 setShowBudget(false);
               }}
             >
@@ -633,20 +959,6 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     heroStatLabel: { ...Typography.small, color: colors.textMuted },
     heroStatValue: { ...Typography.bodyBold, color: colors.text, marginTop: 2 },
     heroDivider: { width: 1, height: 32, backgroundColor: colors.border, marginHorizontal: Spacing.md },
-    filterRow: {
-      flexDirection: 'row',
-      gap: Spacing.sm,
-      marginBottom: Spacing.lg,
-    },
-    filterChip: {
-      flex: 1,
-      alignItems: 'center',
-      paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, borderRadius: Radius.full,
-      backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
-    },
-    filterChipActive: { backgroundColor: colors.primary + '33', borderColor: colors.primary },
-    filterText: { ...Typography.caption, color: colors.textSecondary },
-    filterTextActive: { color: colors.primaryLight, fontWeight: '700' },
     sectionHeading: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -656,18 +968,36 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     },
     sectionTitle: { ...Typography.h2, color: colors.text, fontSize: 18 },
     sectionHint: { ...Typography.caption, color: colors.textMuted, marginTop: 2 },
-    periodPill: {
-      ...Typography.small,
-      color: colors.primaryLight,
-      fontWeight: '700',
+    sectionActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.xs },
+    sectionFilterBtn: {
+      width: 38,
+      height: 38,
+      alignItems: 'center',
+      justifyContent: 'center',
       backgroundColor: colors.primary + '18',
       borderWidth: 1,
       borderColor: colors.primary + '35',
-      borderRadius: Radius.full,
-      paddingHorizontal: Spacing.sm,
-      paddingVertical: Spacing.xs,
-      overflow: 'hidden',
+      borderRadius: 14,
     },
+    sectionFilterBtnActive: { backgroundColor: colors.primary + '28', borderColor: colors.primary },
+    searchBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderRadius: Radius.lg,
+      paddingHorizontal: Spacing.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: Spacing.md,
+    },
+    searchIcon: { marginRight: Spacing.sm },
+    searchInput: {
+      flex: 1,
+      ...Typography.body,
+      color: colors.text,
+      paddingVertical: Spacing.md,
+    },
+    clearBtn: { color: colors.textMuted, fontSize: 16, padding: Spacing.sm },
     dayHeading: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -740,16 +1070,152 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       shadowColor: colors.primary, shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.45, shadowRadius: 14, elevation: 12,
     },
     fabIcon: { fontSize: 28, color: '#FFF', fontWeight: '300' },
+    filterOverlay: {
+      flex: 1,
+      justifyContent: 'flex-end',
+      padding: Spacing.lg,
+    },
+    filterSheet: {
+      backgroundColor: colors.surface,
+      borderRadius: Radius.xl,
+      padding: Spacing.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: Spacing.md,
+    },
+    filterSheetHeader: {
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      justifyContent: 'space-between',
+      gap: Spacing.md,
+    },
+    filterSheetTitle: { ...Typography.h2, color: colors.text },
+    filterSheetHint: { ...Typography.caption, color: colors.textMuted, marginTop: 2 },
+    filterSectionLabel: {
+      ...Typography.small,
+      color: colors.textMuted,
+      fontWeight: '800',
+      letterSpacing: 1,
+      marginTop: Spacing.xs,
+    },
+    filterCloseBtn: {
+      width: 34,
+      height: 34,
+      borderRadius: Radius.full,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.surfaceElevated,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    filterOptions: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'space-between',
+      rowGap: Spacing.sm,
+    },
+    filterOption: {
+      width: '31.5%',
+      minHeight: 48,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 7,
+      borderRadius: Radius.md,
+      backgroundColor: colors.surfaceElevated,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    filterOptionActive: {
+      backgroundColor: colors.primary + '2B',
+      borderColor: colors.primary,
+    },
+    filterOptionDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor: colors.textMuted + '55',
+    },
+    filterOptionDotActive: {
+      backgroundColor: colors.primaryLight,
+      shadowColor: colors.primary,
+      shadowOpacity: 0.8,
+      shadowRadius: 4,
+    },
+    filterOptionText: { ...Typography.small, color: colors.textSecondary, fontWeight: '600' },
+    filterOptionTextActive: { color: colors.primaryLight, fontWeight: '800' },
+    filterPeriodNav: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: colors.surfaceElevated,
+      borderRadius: Radius.lg,
+      borderWidth: 1,
+      borderColor: colors.border,
+      padding: Spacing.xs,
+    },
+    filterPeriodBtn: {
+      width: 40,
+      height: 40,
+      borderRadius: Radius.md,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.surface,
+    },
+    filterPeriodArrow: { color: colors.text, fontSize: 24, lineHeight: 26 },
+    filterPeriodLabel: {
+      ...Typography.bodyBold,
+      color: colors.text,
+      flex: 1,
+      textAlign: 'center',
+    },
+    filterApplyBtn: {
+      minHeight: 48,
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: Radius.lg,
+      backgroundColor: colors.primary,
+    },
+    filterApplyBtnDisabled: { opacity: 0.72 },
+    filterApplyingRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+    filterApplyText: { ...Typography.bodyBold, color: '#FFF' },
     budgetOverlay: { flex: 1, justifyContent: 'center', padding: Spacing.lg },
     budgetSheet: {
       backgroundColor: colors.surface, borderRadius: Radius.xl, padding: Spacing.lg,
       borderWidth: 1, borderColor: colors.border,
     },
-    budgetTitle: { ...Typography.h2, color: colors.text, marginBottom: Spacing.md, textAlign: 'center' },
+    budgetTitle: { ...Typography.h2, color: colors.text, textAlign: 'center' },
+    budgetMonth: {
+      ...Typography.bodyBold,
+      color: colors.primaryLight,
+      textAlign: 'center',
+      marginTop: 4,
+    },
+    budgetHint: {
+      ...Typography.caption,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      marginTop: 4,
+      marginBottom: Spacing.md,
+    },
     budgetInput: {
       backgroundColor: colors.surfaceElevated, borderRadius: Radius.md, padding: Spacing.md,
       color: colors.text, fontSize: 24, fontWeight: '700', textAlign: 'center',
       borderWidth: 1, borderColor: colors.border,
+    },
+    budgetRepeatRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: Spacing.md,
+      marginTop: Spacing.md,
+      paddingHorizontal: Spacing.xs,
+    },
+    budgetRepeatText: {
+      ...Typography.caption,
+      color: colors.textSecondary,
+      flex: 1,
+      lineHeight: 18,
     },
     budgetSave: { backgroundColor: colors.primary, borderRadius: Radius.lg, padding: Spacing.md, alignItems: 'center', marginTop: Spacing.md },
     budgetSaveText: { ...Typography.bodyBold, color: '#FFF' },

@@ -8,6 +8,14 @@ import { generateId } from '../utils/generateId';
 import { userFacingError } from '../utils/userFacingError';
 import { filterExpenses } from '../utils/expenseAnalytics';
 import {
+  BudgetMonthInput,
+  monthKey,
+  MonthlyBudgetEntry,
+  normalizeMonthlyBudgets,
+  resolveMonthlyBudget,
+  upsertMonthlyBudget,
+} from '../utils/monthlyBudget';
+import {
   isToday,
   parseISO,
 } from 'date-fns';
@@ -19,6 +27,8 @@ export interface JointAccount {
   inviteCode: string;
   memberCount: number;
   monthlyBudget: number;
+  monthlyBudgets: MonthlyBudgetEntry[];
+  repeatMonthlyBudget: boolean;
 }
 
 export interface JointExpenseRaw {
@@ -39,6 +49,9 @@ type GroupApi = {
   inviteCode: string;
   memberCount: number;
   monthlyBudget?: number;
+  month?: string;
+  monthlyBudgets?: MonthlyBudgetEntry[];
+  repeatMonthlyBudget?: boolean;
 };
 
 type CreatePayload = {
@@ -103,7 +116,11 @@ interface JointStore {
   joinJointAccount: (inviteCode: string) => Promise<JointAccount | null>;
   leaveJointAccount: () => Promise<boolean>;
   loadJointExpenses: () => Promise<void>;
-  setMonthlyBudget: (amount: number) => Promise<void>;
+  setMonthlyBudget: (
+    amount: number,
+    month?: BudgetMonthInput,
+    repeatMonthlyBudget?: boolean,
+  ) => Promise<void>;
   syncBudgetWithLocal: () => Promise<void>;
   addJointExpense: (data: CreatePayload) => Promise<Expense>;
   deleteJointExpense: (id: string) => Promise<void>;
@@ -135,6 +152,10 @@ function localBudget(): number {
   return useExpenseStore.getState().monthlyBudget || 0;
 }
 
+function localBudgetEntries(): MonthlyBudgetEntry[] {
+  return useExpenseStore.getState().monthlyBudgets;
+}
+
 function toJoint(g: GroupApi): JointAccount {
   return {
     id: g.id,
@@ -143,7 +164,45 @@ function toJoint(g: GroupApi): JointAccount {
     inviteCode: g.inviteCode,
     memberCount: g.memberCount ?? 1,
     monthlyBudget: g.monthlyBudget ?? 0,
+    monthlyBudgets: normalizeMonthlyBudgets(g.monthlyBudgets),
+    repeatMonthlyBudget: g.repeatMonthlyBudget === true,
   };
+}
+
+function mergeBudgetResponse(
+  current: JointAccount,
+  response: GroupApi,
+  requestedMonth: BudgetMonthInput = new Date(),
+): JointAccount {
+  const monthlyBudgets =
+    response.monthlyBudgets === undefined
+      ? current.monthlyBudgets
+      : normalizeMonthlyBudgets(response.monthlyBudgets);
+  const repeatMonthlyBudget =
+    response.repeatMonthlyBudget ?? current.repeatMonthlyBudget;
+  const targetMonth = response.month || monthKey(requestedMonth);
+  const responseAmount = Number(response.monthlyBudget);
+  const monthlyBudget = resolveMonthlyBudget(
+    monthlyBudgets,
+    new Date(),
+    repeatMonthlyBudget,
+    monthKey(targetMonth) === monthKey(new Date()) && Number.isFinite(responseAmount)
+      ? responseAmount
+      : current.monthlyBudget,
+  );
+  return {
+    ...toJoint({
+      ...current,
+      ...response,
+      monthlyBudgets,
+      repeatMonthlyBudget,
+    }),
+    monthlyBudget,
+  };
+}
+
+function replaceGroup(groups: JointAccount[], updated: JointAccount): JointAccount[] {
+  return groups.map(group => (group.id === updated.id ? updated : group));
 }
 
 function cacheKey(groupId: string) {
@@ -381,7 +440,12 @@ export const useJointStore = create<JointStore>((set, get) => ({
     const joint = get().joint;
     if (!token || !joint) return;
 
-    const mine = localBudget();
+    // Modern month histories stay scoped to their owner/group. This legacy
+    // bridge only migrates a current scalar when one side has no history yet.
+    if (joint.monthlyBudgets.length > 0) return;
+
+    const personal = useExpenseStore.getState();
+    const mine = personal.monthlyBudget || 0;
     const shared = joint.monthlyBudget || 0;
     const max = Math.max(mine, shared);
     if (max <= 0) return;
@@ -394,21 +458,26 @@ export const useJointStore = create<JointStore>((set, get) => ({
             method: 'PATCH',
             token,
             timeoutMs: 25000,
-            body: { monthlyBudget: max, mergeMax: true },
+            body: {
+              monthlyBudget: max,
+              month: monthKey(new Date()),
+              repeatMonthlyBudget: personal.repeatMonthlyBudget,
+              mergeMax: true,
+            },
           },
         );
-        const updated = toJoint({
-          ...data.group,
-          memberCount: data.group.memberCount ?? joint.memberCount,
-        });
-        set({ joint: updated });
-        await useExpenseStore.getState().setMonthlyBudget(updated.monthlyBudget);
+        const updated = mergeBudgetResponse(joint, data.group);
+        set(state => ({
+          joint: updated,
+          groups: replaceGroup(state.groups, updated),
+        }));
       } catch {
         // keep local
       }
-    } else if (shared > mine) {
-      await useExpenseStore.getState().setMonthlyBudget(shared);
-      set({ joint: { ...joint, monthlyBudget: shared } });
+    } else if (shared > mine && localBudgetEntries().length === 0) {
+      await useExpenseStore
+        .getState()
+        .setMonthlyBudget(shared, new Date(), joint.repeatMonthlyBudget);
     }
   },
 
@@ -429,9 +498,6 @@ export const useJointStore = create<JointStore>((set, get) => ({
       });
       const joint = toJoint(data.group);
       set({ joint, groups: [joint], expenses: [], outbox: [], pendingCount: 0, isBusy: false });
-      if (joint.monthlyBudget > 0) {
-        await useExpenseStore.getState().setMonthlyBudget(joint.monthlyBudget);
-      }
       return joint;
     } catch (err: any) {
       set({
@@ -466,9 +532,7 @@ export const useJointStore = create<JointStore>((set, get) => ({
         pendingCount: outbox.length,
         isBusy: false,
       });
-      if (joint.monthlyBudget > 0) {
-        await useExpenseStore.getState().setMonthlyBudget(joint.monthlyBudget);
-      }
+      await get().syncBudgetWithLocal();
       await get().flushOutbox();
       await get().loadJointExpenses();
       return joint;
@@ -521,28 +585,54 @@ export const useJointStore = create<JointStore>((set, get) => ({
     }
   },
 
-  setMonthlyBudget: async amount => {
+  setMonthlyBudget: async (amount, month = new Date(), repeatMonthlyBudget) => {
     const token = authToken();
     const joint = get().joint;
     if (!token || !joint) {
-      await useExpenseStore.getState().setMonthlyBudget(amount);
+      await useExpenseStore
+        .getState()
+        .setMonthlyBudget(amount, month, repeatMonthlyBudget);
       return;
     }
+    const targetMonth = monthKey(month);
+    const monthlyBudgets = upsertMonthlyBudget(joint.monthlyBudgets, targetMonth, amount);
+    const repeat = repeatMonthlyBudget ?? joint.repeatMonthlyBudget;
+    const optimistic: JointAccount = {
+      ...joint,
+      monthlyBudgets,
+      repeatMonthlyBudget: repeat,
+      monthlyBudget: resolveMonthlyBudget(
+        monthlyBudgets,
+        new Date(),
+        repeat,
+        joint.monthlyBudget,
+      ),
+    };
+    set(state => ({
+      joint: optimistic,
+      groups: replaceGroup(state.groups, optimistic),
+    }));
     const data = await apiRequest<{ group: GroupApi }>(
       `/api/groups/${joint.id}/budget`,
       {
         method: 'PATCH',
         token,
         timeoutMs: 25000,
-        body: { monthlyBudget: amount, mergeMax: false },
+        body: {
+          monthlyBudget: amount,
+          month: targetMonth,
+          ...(repeatMonthlyBudget === undefined
+            ? {}
+            : { repeatMonthlyBudget }),
+          mergeMax: false,
+        },
       },
     );
-    const updated = toJoint({
-      ...data.group,
-      memberCount: data.group.memberCount ?? joint.memberCount,
-    });
-    set({ joint: updated });
-    await useExpenseStore.getState().setMonthlyBudget(updated.monthlyBudget);
+    const updated = mergeBudgetResponse(optimistic, data.group, targetMonth);
+    set(state => ({
+      joint: updated,
+      groups: replaceGroup(state.groups, updated),
+    }));
   },
 
   loadJointExpenses: async () => {
@@ -636,7 +726,8 @@ export const useJointStore = create<JointStore>((set, get) => ({
     // A timed-out POST may already exist on the server. Replace the create
     // with a queued cancellation keyed by the same idempotency clientId.
     const createItem = get().outbox.find(
-      i => i.type === 'create' && i.clientId === id,
+      (i): i is Extract<OutboxItem, { type: 'create' }> =>
+        i.type === 'create' && i.clientId === id,
     );
     if (createItem) {
       const cancelItem: OutboxItem = {
@@ -756,7 +847,16 @@ export const useJointStore = create<JointStore>((set, get) => ({
               data.expense,
               jointNow?.id === groupId
                 ? jointNow
-                : { id: groupId, name: '', emoji: '', inviteCode: '', memberCount: 0, monthlyBudget: 0 },
+                : {
+                    id: groupId,
+                    name: '',
+                    emoji: '',
+                    inviteCode: '',
+                    memberCount: 0,
+                    monthlyBudget: 0,
+                    monthlyBudgets: [],
+                    repeatMonthlyBudget: false,
+                  },
             );
             if (item.payload.merchant) saved.merchant = item.payload.merchant;
 

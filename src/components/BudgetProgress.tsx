@@ -9,18 +9,20 @@ import { useTheme } from '../hooks/useTheme';
 interface BudgetProgressProps {
   spent: number;
   budget: number;
+  monthLabel?: string;
   onSetBudget?: () => void;
 }
 
-export function BudgetProgress({ spent, budget, onSetBudget }: BudgetProgressProps) {
+export function BudgetProgress({ spent, budget, monthLabel, onSetBudget }: BudgetProgressProps) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const pct = budget > 0 ? Math.min(spent / budget, 1) : 0;
+  const usedPct = budget > 0 ? spent / budget : 0;
+  const barPct = Math.min(usedPct, 1);
   const width = useSharedValue(0);
 
   React.useEffect(() => {
-    width.value = withSpring(pct, { damping: 16, stiffness: 90 });
-  }, [pct, width]);
+    width.value = withSpring(barPct, { damping: 16, stiffness: 90 });
+  }, [barPct, width]);
 
   const barStyle = useAnimatedStyle(() => ({
     width: `${width.value * 100}%`,
@@ -30,7 +32,7 @@ export function BudgetProgress({ spent, budget, onSetBudget }: BudgetProgressPro
   const isOver = budget > 0 && spent > budget;
   const barColors = isOver
     ? [colors.danger, colors.warning]
-    : pct > 0.8
+    : usedPct > 0.8
       ? [colors.warning, colors.accentWarm]
       : [colors.primary, colors.accent];
 
@@ -39,6 +41,7 @@ export function BudgetProgress({ spent, budget, onSetBudget }: BudgetProgressPro
       <View style={styles.header}>
         <View>
           <Text style={styles.label}>Monthly Budget</Text>
+          {monthLabel ? <Text style={styles.monthLabel}>{monthLabel}</Text> : null}
           <Text style={styles.budgetAmount}>{budget > 0 ? formatCurrency(budget) : 'Set budget'}</Text>
         </View>
         <Pressable onPress={onSetBudget} style={styles.editBtn}>
@@ -57,7 +60,7 @@ export function BudgetProgress({ spent, budget, onSetBudget }: BudgetProgressPro
             <Text style={[styles.footerText, isOver && { color: colors.danger }]}>
               {isOver ? 'Over by ' : 'Left '}{formatCompactCurrency(isOver ? spent - budget : remaining)}
             </Text>
-            <Text style={styles.footerText}>{Math.round(pct * 100)}% used</Text>
+            <Text style={styles.footerText}>{Math.round(usedPct * 100)}% used</Text>
           </View>
         </>
       )}
@@ -73,6 +76,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     },
     header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: Spacing.md },
     label: { ...Typography.caption, color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.8 },
+    monthLabel: { ...Typography.small, color: colors.textMuted, marginTop: 2 },
     budgetAmount: { ...Typography.h2, color: colors.text, marginTop: 2 },
     editBtn: {
       paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm, borderRadius: Radius.full,

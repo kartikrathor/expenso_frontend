@@ -15,6 +15,11 @@ import {
   totalSpent,
   TimeFilterOptions,
 } from '../utils/expenseAnalytics';
+import {
+  BudgetMonthInput,
+  monthKey,
+  resolveMonthlyBudget,
+} from '../utils/monthlyBudget';
 
 /**
  * One-time: queue this device's old local expenses into the joint outbox.
@@ -81,6 +86,8 @@ export function useHouseholdExpenses() {
   const jointExpenses = useJointStore(s => s.expenses);
   const localExpenses = useExpenseStore(s => s.expenses);
   const localBudget = useExpenseStore(s => s.monthlyBudget);
+  const localMonthlyBudgets = useExpenseStore(s => s.monthlyBudgets);
+  const localRepeatMonthlyBudget = useExpenseStore(s => s.repeatMonthlyBudget);
   const loadJoint = useJointStore(s => s.loadJoint);
   const refreshPersonal = useExpenseStore(s => s.refreshFromServer);
   const pendingCount = useJointStore(s => s.pendingCount);
@@ -94,9 +101,22 @@ export function useHouseholdExpenses() {
 
   const isJoint = !!(hasUser && joint);
   const expenses = isJoint ? jointExpenses : localExpenses;
-  const monthlyBudget = isJoint
-    ? (joint?.monthlyBudget ?? localBudget)
+  const monthlyBudgets = useMemo(
+    () => (isJoint ? joint?.monthlyBudgets ?? [] : localMonthlyBudgets),
+    [isJoint, joint?.monthlyBudgets, localMonthlyBudgets],
+  );
+  const repeatMonthlyBudget = isJoint
+    ? joint?.repeatMonthlyBudget ?? false
+    : localRepeatMonthlyBudget;
+  const scalarBudget = isJoint
+    ? joint?.monthlyBudget ?? localBudget
     : localBudget;
+  const monthlyBudget = resolveMonthlyBudget(
+    monthlyBudgets,
+    new Date(),
+    repeatMonthlyBudget,
+    scalarBudget,
+  );
 
   const refresh = useCallback(async (opts?: { force?: boolean }) => {
     if (!hasUser || refreshLock.current) return;
@@ -139,14 +159,29 @@ export function useHouseholdExpenses() {
   );
 
   const setMonthlyBudget = useCallback(
-    async (amount: number) => {
+    async (
+      amount: number,
+      month?: BudgetMonthInput,
+      repeat?: boolean,
+    ) => {
       if (isJoint) {
-        await setJointBudget(amount);
+        await setJointBudget(amount, month, repeat);
       } else {
-        await setLocalBudget(amount);
+        await setLocalBudget(amount, month, repeat);
       }
     },
     [isJoint, setJointBudget, setLocalBudget],
+  );
+
+  const getBudgetForMonth = useCallback(
+    (monthOrDate: BudgetMonthInput) =>
+      resolveMonthlyBudget(
+        monthlyBudgets,
+        monthKey(monthOrDate),
+        repeatMonthlyBudget,
+        scalarBudget,
+      ),
+    [monthlyBudgets, repeatMonthlyBudget, scalarBudget],
   );
 
   const getFiltered = useCallback(
@@ -182,6 +217,9 @@ export function useHouseholdExpenses() {
       joint,
       expenses,
       monthlyBudget,
+      monthlyBudgets,
+      repeatMonthlyBudget,
+      getBudgetForMonth,
       setMonthlyBudget,
       refresh,
       onRefresh,
@@ -200,6 +238,9 @@ export function useHouseholdExpenses() {
       joint,
       expenses,
       monthlyBudget,
+      monthlyBudgets,
+      repeatMonthlyBudget,
+      getBudgetForMonth,
       setMonthlyBudget,
       refresh,
       onRefresh,

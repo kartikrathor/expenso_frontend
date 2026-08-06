@@ -30,6 +30,7 @@ import { AppAlertModal, AppAlertContent } from './AppAlertModal';
 import { ChatHistorySkeleton } from './Skeleton';
 import { SpiderWebBackground } from './SpiderWebBackground';
 import { userFacingError } from '../utils/userFacingError';
+import { MonthlyBudgetEntry } from '../utils/monthlyBudget';
 import {
   detectChatLang,
   localizeChips,
@@ -83,6 +84,8 @@ type ChatBubble = {
 type AskExpensoChatProps = {
   expenses: Expense[];
   monthlyBudget: number;
+  monthlyBudgets: MonthlyBudgetEntry[];
+  repeatMonthlyBudget: boolean;
   isJoint: boolean;
 };
 
@@ -100,6 +103,12 @@ function welcomeBubble(isJoint: boolean): ChatBubble {
     chips,
     createdAt: Date.now(),
   };
+}
+
+function localTodayKey(now = new Date()): string {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+    now.getDate(),
+  ).padStart(2, '0')}`;
 }
 
 function mapStored(stored: ReturnType<typeof getAskChatHistoryCached>): ChatBubble[] {
@@ -142,6 +151,8 @@ function initialMessages(
 export function AskExpensoChat({
   expenses,
   monthlyBudget,
+  monthlyBudgets,
+  repeatMonthlyBudget,
   isJoint,
 }: AskExpensoChatProps) {
   const insets = useSafeAreaInsets();
@@ -430,10 +441,14 @@ export function AskExpensoChat({
           body: {
             message: text,
             monthlyBudget,
+            monthlyBudgets,
+            repeatMonthlyBudget,
             isJoint,
             inputMode: mode,
             lastIntent,
             lang,
+            clientToday: localTodayKey(),
+            timezoneOffsetMinutes: new Date().getTimezoneOffset(),
             history: prior,
             ...(chipContext ? { chipContext } : {}),
             expenses: expenses.map(e => ({
@@ -511,6 +526,8 @@ export function AskExpensoChat({
       busy,
       expenses,
       monthlyBudget,
+      monthlyBudgets,
+      repeatMonthlyBudget,
       isJoint,
       lastIntent,
       chips,
@@ -565,8 +582,12 @@ export function AskExpensoChat({
             message: question,
             previousReply: assistantMsg.text,
             monthlyBudget,
+            monthlyBudgets,
+            repeatMonthlyBudget,
             isJoint,
             lang,
+            clientToday: localTodayKey(),
+            timezoneOffsetMinutes: new Date().getTimezoneOffset(),
             history: prior,
             // Full expense list goes to server for AI — never shown in UI
             expenses: expenses.map(e => ({
@@ -639,7 +660,17 @@ export function AskExpensoChat({
         setPreciseBusyId(null);
       }
     },
-    [token, busy, preciseBusyId, expenses, monthlyBudget, isJoint, openPaywall],
+    [
+      token,
+      busy,
+      preciseBusyId,
+      expenses,
+      monthlyBudget,
+      monthlyBudgets,
+      repeatMonthlyBudget,
+      isJoint,
+      openPaywall,
+    ],
   );
 
   const rootProps =

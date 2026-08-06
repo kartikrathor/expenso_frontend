@@ -9,6 +9,14 @@ import { filterExpenses, sortByNewest } from '../utils/expenseAnalytics';
 import { apiRequest } from '../services/api';
 import { useAuthStore } from './authStore';
 import { generateId } from '../utils/generateId';
+import {
+  BudgetMonthInput,
+  monthKey,
+  MonthlyBudgetEntry,
+  normalizeMonthlyBudgets,
+  resolveMonthlyBudget,
+  upsertMonthlyBudget,
+} from '../utils/monthlyBudget';
 
 function expensesKey(userId: string) {
   return `@expensewise_expenses_${userId}`;
@@ -30,6 +38,8 @@ const MONGO_ID_RE = /^[a-f0-9]{24}$/i;
 interface ExpenseStore {
   expenses: Expense[];
   monthlyBudget: number;
+  monthlyBudgets: MonthlyBudgetEntry[];
+  repeatMonthlyBudget: boolean;
   isLoaded: boolean;
   activeUserId: string | null;
   isSyncing: boolean;
@@ -37,7 +47,11 @@ interface ExpenseStore {
   loadForUser: (userId: string | null) => Promise<void>;
   refreshFromServer: () => Promise<void>;
   clearAllExpenses: () => Promise<void>;
-  setMonthlyBudget: (amount: number) => Promise<void>;
+  setMonthlyBudget: (
+    amount: number,
+    month?: BudgetMonthInput,
+    repeatMonthlyBudget?: boolean,
+  ) => Promise<void>;
   addExpense: (expense: Omit<Expense, 'id' | 'createdAt'>) => Promise<Expense>;
   updateExpense: (id: string, changes: Partial<Omit<Expense, 'id' | 'createdAt'>>) => Promise<void>;
   deleteExpense: (id: string) => Promise<void>;
@@ -62,6 +76,27 @@ type ServerExpense = {
   date: string | Date;
   inputMethod?: 'voice' | 'manual';
   createdAt?: string | Date;
+};
+
+type BudgetApiResponse = {
+  monthlyBudget?: number;
+  month?: string;
+  monthlyBudgets?: MonthlyBudgetEntry[];
+  repeatMonthlyBudget?: boolean;
+};
+
+type BudgetCacheV2 = {
+  version: 2;
+  monthlyBudget: number;
+  monthlyBudgets: MonthlyBudgetEntry[];
+  repeatMonthlyBudget: boolean;
+};
+
+type CachedData = {
+  expenses: Expense[];
+  monthlyBudget: number;
+  monthlyBudgets: MonthlyBudgetEntry[];
+  repeatMonthlyBudget: boolean;
 };
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -130,16 +165,22 @@ function dedupeServerExpenses(expenses: ServerExpense[]): ServerExpense[] {
   });
 }
 
-let pendingPersist: { userId: string; expenses: Expense[]; budget: number } | null = null;
+let pendingPersist: { userId: string; data: CachedData } | null = null;
 /** Bumps on every loadForUser so stale network responses never overwrite a newer session. */
 let loadSeq = 0;
 const personalSyncInFlight = new Map<string, Promise<number>>();
 const duplicateCleanupDone = new Set<string>();
 
-async function writePersistJob(job: { userId: string; expenses: Expense[]; budget: number }) {
+async function writePersistJob(job: { userId: string; data: CachedData }) {
+  const budget: BudgetCacheV2 = {
+    version: 2,
+    monthlyBudget: job.data.monthlyBudget,
+    monthlyBudgets: normalizeMonthlyBudgets(job.data.monthlyBudgets),
+    repeatMonthlyBudget: job.data.repeatMonthlyBudget,
+  };
   await AsyncStorage.setMany({
-    [expensesKey(job.userId)]: JSON.stringify(job.expenses),
-    [budgetKey(job.userId)]: String(job.budget),
+    [expensesKey(job.userId)]: JSON.stringify(job.data.expenses),
+    [budgetKey(job.userId)]: JSON.stringify(budget),
   });
 }
 
@@ -155,13 +196,71 @@ async function flushPersistCache() {
   }
 }
 
-async function persistCacheNow(userId: string | null, expenses: Expense[], budget: number) {
+async function persistCacheNow(userId: string | null, data: CachedData) {
   if (!userId) return;
-  pendingPersist = { userId, expenses, budget };
+  pendingPersist = { userId, data };
   await flushPersistCache();
 }
 
-async function readCache(userId: string): Promise<{ expenses: Expense[]; monthlyBudget: number }> {
+function parseBudgetCache(raw: string | undefined): Omit<CachedData, 'expenses'> {
+  const empty = {
+    monthlyBudget: 0,
+    monthlyBudgets: [] as MonthlyBudgetEntry[],
+    repeatMonthlyBudget: false,
+  };
+  if (!raw) return empty;
+
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed === 'number') return { ...empty, monthlyBudget: parsed };
+    if (!parsed || typeof parsed !== 'object') return empty;
+    const value = parsed as Partial<BudgetCacheV2>;
+    return {
+      monthlyBudget: Number(value.monthlyBudget) || 0,
+      monthlyBudgets: normalizeMonthlyBudgets(value.monthlyBudgets),
+      repeatMonthlyBudget: value.repeatMonthlyBudget === true,
+    };
+  } catch {
+    const legacyScalar = Number.parseFloat(raw);
+    return { ...empty, monthlyBudget: Number.isFinite(legacyScalar) ? legacyScalar : 0 };
+  }
+}
+
+function budgetFromApi(
+  response: BudgetApiResponse,
+  fallback?: Omit<CachedData, 'expenses'>,
+): Omit<CachedData, 'expenses'> {
+  const monthlyBudgets =
+    response.monthlyBudgets === undefined
+      ? fallback?.monthlyBudgets ?? []
+      : normalizeMonthlyBudgets(response.monthlyBudgets);
+  const repeatMonthlyBudget =
+    response.repeatMonthlyBudget ?? fallback?.repeatMonthlyBudget ?? false;
+  const scalar = Number(response.monthlyBudget);
+  const currentMonth = monthKey(new Date());
+  const scalarIsCurrent =
+    !response.month || monthKey(response.month) === currentMonth;
+  const monthlyBudget = resolveMonthlyBudget(
+    monthlyBudgets,
+    currentMonth,
+    repeatMonthlyBudget,
+    scalarIsCurrent && Number.isFinite(scalar)
+      ? scalar
+      : fallback?.monthlyBudget ?? 0,
+  );
+  return { monthlyBudget, monthlyBudgets, repeatMonthlyBudget };
+}
+
+function currentCacheData(state: ExpenseStore): CachedData {
+  return {
+    expenses: state.expenses,
+    monthlyBudget: state.monthlyBudget,
+    monthlyBudgets: state.monthlyBudgets,
+    repeatMonthlyBudget: state.repeatMonthlyBudget,
+  };
+}
+
+async function readCache(userId: string): Promise<CachedData> {
   try {
     const expenseCacheKey = expensesKey(userId);
     const userBudgetKey = budgetKey(userId);
@@ -170,10 +269,15 @@ async function readCache(userId: string): Promise<{ expenses: Expense[]; monthly
     const budgetRaw = entries[userBudgetKey];
     return {
       expenses: raw ? JSON.parse(raw) : [],
-      monthlyBudget: budgetRaw ? parseFloat(budgetRaw) || 0 : 0,
+      ...parseBudgetCache(budgetRaw ?? undefined),
     };
   } catch {
-    return { expenses: [], monthlyBudget: 0 };
+    return {
+      expenses: [],
+      monthlyBudget: 0,
+      monthlyBudgets: [],
+      repeatMonthlyBudget: false,
+    };
   }
 }
 
@@ -195,6 +299,8 @@ function isLocalOnlyId(id: string): boolean {
 async function collectLocalCandidates(userId: string): Promise<{
   expenses: Expense[];
   monthlyBudget: number;
+  monthlyBudgets: MonthlyBudgetEntry[];
+  repeatMonthlyBudget: boolean;
 }> {
   const cached = await readCache(userId);
   const byFp = new Map<string, Expense>();
@@ -225,6 +331,8 @@ async function collectLocalCandidates(userId: string): Promise<{
   return {
     expenses: [...byFp.values()],
     monthlyBudget: cached.monthlyBudget > 0 ? cached.monthlyBudget : legacyBudget,
+    monthlyBudgets: cached.monthlyBudgets,
+    repeatMonthlyBudget: cached.repeatMonthlyBudget,
   };
 }
 
@@ -294,13 +402,29 @@ async function syncLocalCacheToServerOnce(userId: string, token: string): Promis
 
   // Push personal budget if we have one and server is still 0
   try {
-    const budgetRes = await apiRequest<{ monthlyBudget: number }>('/api/expenses/budget', { token });
+    const budgetRes = await apiRequest<BudgetApiResponse>(
+      `/api/expenses/budget?month=${monthKey(new Date())}`,
+      { token },
+    );
     const serverBudget = budgetRes.monthlyBudget ?? 0;
-    if (local.monthlyBudget > 0 && serverBudget <= 0) {
+    const serverEntries = normalizeMonthlyBudgets(budgetRes.monthlyBudgets);
+    if (local.monthlyBudgets.length > 0 && serverEntries.length === 0) {
+      for (const entry of local.monthlyBudgets) {
+        await apiRequest('/api/expenses/budget', {
+          method: 'PATCH',
+          token,
+          body: {
+            monthlyBudget: entry.amount,
+            month: entry.month,
+            repeatMonthlyBudget: local.repeatMonthlyBudget,
+          },
+        });
+      }
+    } else if (local.monthlyBudget > 0 && serverBudget <= 0 && serverEntries.length === 0) {
       await apiRequest('/api/expenses/budget', {
         method: 'PATCH',
         token,
-        body: { monthlyBudget: local.monthlyBudget },
+        body: { monthlyBudget: local.monthlyBudget, month: monthKey(new Date()) },
       });
     }
   } catch {
@@ -346,6 +470,8 @@ async function syncLocalCacheToServer(userId: string, token: string): Promise<nu
 export const useExpenseStore = create<ExpenseStore>((set, get) => ({
   expenses: [],
   monthlyBudget: 0,
+  monthlyBudgets: [],
+  repeatMonthlyBudget: false,
   isLoaded: false,
   activeUserId: null,
   isSyncing: false,
@@ -364,6 +490,8 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
       set({
         expenses: [],
         monthlyBudget: 0,
+        monthlyBudgets: [],
+        repeatMonthlyBudget: false,
         isLoaded: true,
         activeUserId: null,
         isSyncing: false,
@@ -377,6 +505,8 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     set({
       expenses: sortByNewest(localBundle.expenses),
       monthlyBudget: localBundle.monthlyBudget,
+      monthlyBudgets: localBundle.monthlyBudgets,
+      repeatMonthlyBudget: localBundle.repeatMonthlyBudget,
       isLoaded: true,
       activeUserId: userId,
     });
@@ -392,7 +522,9 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
 
       const [listRes, budgetRes] = await Promise.all([
         apiRequest<{ expenses: ServerExpense[] }>('/api/expenses', { token }),
-        apiRequest<{ monthlyBudget: number }>('/api/expenses/budget', { token }),
+        apiRequest<BudgetApiResponse>(`/api/expenses/budget?month=${monthKey(new Date())}`, {
+          token,
+        }),
       ]);
       if (seq !== loadSeq || get().activeUserId !== userId) return;
 
@@ -405,9 +537,9 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
       const expenses = orphans.length
         ? sortByNewest([...orphans, ...remoteList])
         : remoteList;
-      const monthlyBudget = budgetRes.monthlyBudget ?? 0;
-      set({ expenses, monthlyBudget, isSyncing: false });
-      await persistCacheNow(userId, expenses, monthlyBudget);
+      const budget = budgetFromApi(budgetRes, localBundle);
+      set({ expenses, ...budget, isSyncing: false });
+      await persistCacheNow(userId, { expenses, ...budget });
     } catch {
       // Keep cache if offline / server down
       if (seq === loadSeq && get().activeUserId === userId) {
@@ -427,7 +559,9 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
       if (seq !== loadSeq || get().activeUserId !== userId) return;
       const [listRes, budgetRes] = await Promise.all([
         apiRequest<{ expenses: ServerExpense[] }>('/api/expenses', { token }),
-        apiRequest<{ monthlyBudget: number }>('/api/expenses/budget', { token }),
+        apiRequest<BudgetApiResponse>(`/api/expenses/budget?month=${monthKey(new Date())}`, {
+          token,
+        }),
       ]);
       if (seq !== loadSeq || get().activeUserId !== userId) return;
       const remoteList = sortByNewest(dedupeServerExpenses(listRes.expenses || []).map(toExpense));
@@ -438,9 +572,9 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
       const expenses = orphans.length
         ? sortByNewest([...orphans, ...remoteList])
         : remoteList;
-      const monthlyBudget = budgetRes.monthlyBudget ?? 0;
-      set({ expenses, monthlyBudget, isSyncing: false });
-      await persistCacheNow(userId, expenses, monthlyBudget);
+      const budget = budgetFromApi(budgetRes, get());
+      set({ expenses, ...budget, isSyncing: false });
+      await persistCacheNow(userId, { expenses, ...budget });
     } catch {
       if (seq === loadSeq && get().activeUserId === userId) {
         set({ isSyncing: false });
@@ -453,7 +587,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     const token = authToken();
     const current = [...get().expenses];
     set({ expenses: [] });
-    if (userId) await persistCacheNow(userId, [], get().monthlyBudget);
+    if (userId) await persistCacheNow(userId, currentCacheData(get()));
     if (token) {
       for (const e of current) {
         try {
@@ -465,17 +599,36 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     }
   },
 
-  setMonthlyBudget: async (amount) => {
+  setMonthlyBudget: async (amount, month = new Date(), repeatMonthlyBudget) => {
     const userId = get().activeUserId;
     const token = authToken();
-    set({ monthlyBudget: amount });
-    if (userId) await AsyncStorage.setItem(budgetKey(userId), String(amount));
+    const targetMonth = monthKey(month);
+    const previous = get();
+    const monthlyBudgets = upsertMonthlyBudget(previous.monthlyBudgets, targetMonth, amount);
+    const repeat = repeatMonthlyBudget ?? previous.repeatMonthlyBudget;
+    const monthlyBudget = resolveMonthlyBudget(
+      monthlyBudgets,
+      new Date(),
+      repeat,
+      previous.monthlyBudget,
+    );
+    set({ monthlyBudget, monthlyBudgets, repeatMonthlyBudget: repeat });
+    if (userId) await persistCacheNow(userId, currentCacheData(get()));
     if (token) {
-      await apiRequest('/api/expenses/budget', {
+      const response = await apiRequest<BudgetApiResponse>('/api/expenses/budget', {
         method: 'PATCH',
         token,
-        body: { monthlyBudget: amount },
+        body: {
+          monthlyBudget: amount,
+          month: targetMonth,
+          ...(repeatMonthlyBudget === undefined
+            ? {}
+            : { repeatMonthlyBudget }),
+        },
       });
+      const budget = budgetFromApi(response, get());
+      set(budget);
+      if (userId) await persistCacheNow(userId, currentCacheData(get()));
     }
   },
 
@@ -506,7 +659,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     const expenses = sortByNewest([expense, ...get().expenses]);
     set({ expenses });
     // Write through immediately so logout right after add never loses the row
-    await persistCacheNow(userId, expenses, get().monthlyBudget);
+    await persistCacheNow(userId, currentCacheData(get()));
     return expense;
   },
 
@@ -526,7 +679,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
       get().expenses.map(e => (e.id === id ? updated : e)),
     );
     set({ expenses });
-    await persistCacheNow(userId, expenses, get().monthlyBudget);
+    await persistCacheNow(userId, currentCacheData(get()));
   },
 
   deleteExpense: async (id) => {
@@ -537,7 +690,7 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     await apiRequest(`/api/expenses/${id}`, { method: 'DELETE', token });
     const expenses = get().expenses.filter(e => e.id !== id);
     set({ expenses });
-    await persistCacheNow(userId, expenses, get().monthlyBudget);
+    await persistCacheNow(userId, currentCacheData(get()));
   },
 
   deleteExpensesByYear: async (year) => {
@@ -626,3 +779,5 @@ export const useExpenseStore = create<ExpenseStore>((set, get) => ({
     }));
   },
 }));
+
+export type { MonthlyBudgetEntry } from '../utils/monthlyBudget';
