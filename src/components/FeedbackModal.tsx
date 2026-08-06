@@ -91,7 +91,7 @@ export function FeedbackModal({ visible, onClose, onSent }: FeedbackModalProps) 
     <Modal visible={visible} animationType="slide" onRequestClose={close}>
       <KeyboardAvoidingView
         style={[styles.root, { paddingTop: insets.top, backgroundColor: colors.background }]}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <View style={styles.header}>
           <Pressable onPress={close} hitSlop={12}>
