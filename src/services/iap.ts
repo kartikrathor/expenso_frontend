@@ -21,6 +21,7 @@ export const DEFAULT_PRO_SKUS = {
 } as const;
 
 type ProSkus = { monthly: string; yearly: string };
+export type ThemeSkus = { monthly: string; permanent: string };
 
 let connecting: Promise<boolean> | null = null;
 let connected = false;
@@ -37,7 +38,11 @@ export async function ensureIapConnected(): Promise<boolean> {
       connected = false;
       const raw = String(err?.message || err || '');
       if (__DEV__) console.warn('[IAP] initConnection failed', err);
-      if (/NitroModules|Nitro runtime|Turbo\/Native-Module could not be found/i.test(raw)) {
+      if (
+        /NitroModules|Nitro runtime|Turbo\/Native-Module could not be found/i.test(
+          raw,
+        )
+      ) {
         throw new Error(
           'Billing native module missing. Rebuild the app after installing react-native-nitro-modules (yarn android).',
         );
@@ -79,14 +84,17 @@ function isUserCancel(err: any) {
   );
 }
 
-async function verifyPurchaseOnServer(purchase: Purchase) {
+async function verifyPurchaseOnServer(
+  purchase: Purchase,
+  endpoint = '/api/pro/iap/verify',
+) {
   const token = useAuthStore.getState().token;
   if (!token) throw new Error('Please sign in again.');
 
   const purchaseToken = purchase.purchaseToken;
   if (!purchaseToken) throw new Error('Missing purchase token from store.');
 
-  await apiRequest('/api/pro/iap/verify', {
+  await apiRequest(endpoint, {
     method: 'POST',
     token,
     body: {
@@ -104,14 +112,21 @@ async function verifyPurchaseOnServer(purchase: Purchase) {
   await finishTransaction({ purchase, isConsumable: false });
 }
 
-function waitForPurchase(productId: string, timeoutMs = 120_000): Promise<Purchase> {
+function waitForPurchase(
+  productId: string,
+  timeoutMs = 120_000,
+): Promise<Purchase> {
   return new Promise((resolve, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
       cleanup();
       if (!settled) {
         settled = true;
-        reject(new Error('Payment timed out. If you were charged, tap Restore purchases.'));
+        reject(
+          new Error(
+            'Payment timed out. If you were charged, tap Restore purchases.',
+          ),
+        );
       }
     }, timeoutMs);
 
@@ -166,7 +181,9 @@ export async function purchaseProSubscription(
     type: 'subs',
   })) as ProductSubscription[] | null;
 
-  const product = products?.find(p => p.id === productId || (p as any).productId === productId);
+  const product = products?.find(
+    p => p.id === productId || (p as any).productId === productId,
+  );
   if (!product) {
     throw new Error(
       `Product “${productId}” not found in the store. Create it in Play Console / App Store Connect and publish.`,
@@ -206,7 +223,9 @@ export async function purchaseProSubscription(
 }
 
 /** Restore existing store subscriptions and re-link to this Expenso account. */
-export async function restoreProPurchases(skus: ProSkus = DEFAULT_PRO_SKUS): Promise<boolean> {
+export async function restoreProPurchases(
+  skus: ProSkus = DEFAULT_PRO_SKUS,
+): Promise<boolean> {
   await ensureIapConnected();
   const allowed = new Set([skus.monthly, skus.yearly]);
   const purchases = await getAvailablePurchases();
@@ -223,4 +242,64 @@ export async function restoreProPurchases(skus: ProSkus = DEFAULT_PRO_SKUS): Pro
 
   await verifyPurchaseOnServer(pick);
   return true;
+}
+
+export async function purchaseThemePack(
+  kind: 'monthly' | 'permanent',
+  skus: ThemeSkus,
+): Promise<void> {
+  await ensureIapConnected();
+  const productId = kind === 'monthly' ? skus.monthly : skus.permanent;
+  if (!productId) throw new Error('Theme store product ID is not configured.');
+  const type = kind === 'monthly' ? 'subs' : 'in-app';
+  const products = (await fetchProducts({ skus: [productId], type })) as
+    | any[]
+    | null;
+  const product = products?.find(
+    p => p.id === productId || p.productId === productId,
+  );
+  if (!product) {
+    throw new Error(
+      `Product “${productId}” not found. Create and publish it in the store console.`,
+    );
+  }
+  const purchasePromise = waitForPurchase(productId);
+  if (kind === 'monthly' && Platform.OS === 'android') {
+    const offerToken = (product.subscriptionOffers || []).find(
+      (offer: any) => offer.offerTokenAndroid,
+    )?.offerTokenAndroid;
+    if (!offerToken)
+      throw new Error('Add a base plan for this theme in Play Console.');
+    await requestPurchase({
+      type: 'subs',
+      request: {
+        google: {
+          skus: [productId],
+          subscriptionOffers: [{ sku: productId, offerToken }],
+        },
+      },
+    });
+  } else {
+    await requestPurchase({
+      type: type as any,
+      request:
+        Platform.OS === 'android'
+          ? ({ google: { skus: [productId] } } as any)
+          : ({ apple: { sku: productId } } as any),
+    });
+  }
+  const purchase = await purchasePromise;
+  await verifyPurchaseOnServer(purchase, '/api/pro/themes/iap/verify');
+}
+
+export async function restoreThemePack(skus: ThemeSkus): Promise<void> {
+  await ensureIapConnected();
+  const allowed = new Set([skus.monthly, skus.permanent].filter(Boolean));
+  const purchases = await getAvailablePurchases();
+  const purchase = (purchases || []).find(item => allowed.has(item.productId));
+  if (!purchase)
+    throw new Error(
+      'No purchase for this theme was found on this store account.',
+    );
+  await verifyPurchaseOnServer(purchase, '/api/pro/themes/iap/verify');
 }

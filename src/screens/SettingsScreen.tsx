@@ -19,7 +19,10 @@ import { Spacing, Typography, Radius } from '../constants/theme';
 import { useTheme } from '../hooks/useTheme';
 import { useAppLockStore } from '../store/appLockStore';
 import { useHouseholdExpenses } from '../hooks/useHouseholdExpenses';
-import { exportAndShareExcel, exportAndSharePdf } from '../utils/exportExpenses';
+import {
+  exportAndShareExcel,
+  exportAndSharePdf,
+} from '../utils/exportExpenses';
 import {
   getBiometryAvailability,
   promptBiometricUnlock,
@@ -29,6 +32,7 @@ import { AppAlertModal, AppAlertContent } from '../components/AppAlertModal';
 import { FeedbackModal } from '../components/FeedbackModal';
 import { SupportModal } from '../components/SupportModal';
 import { ThemesScreen } from './ThemesScreen';
+import { WidgetScreen } from './WidgetScreen';
 import { useAuthStore } from '../store/authStore';
 import { useJointStore } from '../store/jointStore';
 import { useProStore } from '../store/proStore';
@@ -53,14 +57,23 @@ type RowProps = {
   danger?: boolean;
 };
 
-function SettingsRow({ title, subtitle, onPress, right, pro, danger }: RowProps) {
-  const { colors, actionGradient } = useTheme();
+function SettingsRow({
+  title,
+  subtitle,
+  onPress,
+  right,
+  pro,
+  danger,
+}: RowProps) {
+  const { colors } = useTheme();
   const styles = useMemo(() => rowStyles(colors), [colors]);
   const content = (
     <>
       <View style={{ flex: 1 }}>
         <View style={styles.titleRow}>
-          <Text style={[styles.title, danger && { color: colors.danger }]}>{title}</Text>
+          <Text style={[styles.title, danger && { color: colors.danger }]}>
+            {title}
+          </Text>
           {pro ? (
             <View style={styles.proPill}>
               <Text style={styles.proText}>PRO</Text>
@@ -103,6 +116,7 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const [themesOpen, setThemesOpen] = useState(false);
+  const [widgetOpen, setWidgetOpen] = useState(false);
   const isPro = useProStore(s => s.isPro);
   const openPaywall = useProStore(s => s.openPaywall);
   const packId = useThemeStore(s => s.packId);
@@ -141,7 +155,10 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
         showAlert({
           icon: '⚠️',
           title: 'Couldn’t update',
-          message: userFacingError(err, 'Couldn’t update this setting. Please try again.'),
+          message: userFacingError(
+            err,
+            'Couldn’t update this setting. Please try again.',
+          ),
         });
       }
     },
@@ -156,7 +173,10 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
         showAlert({
           icon: '⚠️',
           title: 'Couldn’t update',
-          message: userFacingError(err, 'Couldn’t update this setting. Please try again.'),
+          message: userFacingError(
+            err,
+            'Couldn’t update this setting. Please try again.',
+          ),
         });
       }
     },
@@ -184,10 +204,10 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
   useEffect(() => {
     if (!visible || !token) return;
     let cancelled = false;
-    apiRequest<{ unreadCount?: number; tickets?: { unread?: boolean; unreadByUser?: boolean }[] }>(
-      '/api/support/tickets?limit=30',
-      { token },
-    )
+    apiRequest<{
+      unreadCount?: number;
+      tickets?: { unread?: boolean; unreadByUser?: boolean }[];
+    }>('/api/support/tickets?limit=30', { token })
       .then(data => {
         if (cancelled) return;
         const count =
@@ -218,7 +238,10 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
           showAlert({
             icon: '🔒',
             title: 'Lock',
-            message: userFacingError(e, 'Couldn’t turn on App lock. Please try again.'),
+            message: userFacingError(
+              e,
+              'Couldn’t turn on App lock. Please try again.',
+            ),
           });
         }
         return;
@@ -229,7 +252,10 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
         showAlert({
           icon: '🔒',
           title: 'Lock',
-          message: userFacingError(e, 'Couldn’t turn off App lock. Please try again.'),
+          message: userFacingError(
+            e,
+            'Couldn’t turn off App lock. Please try again.',
+          ),
         });
       }
     },
@@ -271,7 +297,10 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
       showAlert({
         icon: '👆',
         title: 'Biometric',
-        message: userFacingError(e, 'Couldn’t update biometric unlock. Please try again.'),
+        message: userFacingError(
+          e,
+          'Couldn’t update biometric unlock. Please try again.',
+        ),
       });
     }
   }, [setBiometricEnabled, showAlert]);
@@ -294,10 +323,16 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
           showAlert({
             icon: '🔒',
             title: 'Set App lock first',
-            message: `To use ${bio?.label || 'biometric'} unlock, you need an App lock PIN first. Your PIN is also the backup if fingerprint or Face ID fails.`,
+            message: `To use ${
+              bio?.label || 'biometric'
+            } unlock, you need an App lock PIN first. Your PIN is also the backup if fingerprint or Face ID fails.`,
             buttons: [
               { label: 'Cancel', variant: 'secondary' },
-              { label: 'Set PIN', variant: 'primary', onPress: openPinForBiometric },
+              {
+                label: 'Set PIN',
+                variant: 'primary',
+                onPress: openPinForBiometric,
+              },
             ],
           });
           return;
@@ -311,7 +346,10 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
         showAlert({
           icon: '👆',
           title: 'Biometric',
-          message: userFacingError(e, 'Couldn’t update biometric unlock. Please try again.'),
+          message: userFacingError(
+            e,
+            'Couldn’t update biometric unlock. Please try again.',
+          ),
         });
       }
     },
@@ -364,7 +402,15 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
         message: userFacingError(e, 'Please enter a 4–8 digit PIN.'),
       });
     }
-  }, [pin, pin2, setPin, bio, pendingBioAfterPin, enableBiometricFlow, showAlert]);
+  }, [
+    pin,
+    pin2,
+    setPin,
+    bio,
+    pendingBioAfterPin,
+    enableBiometricFlow,
+    showAlert,
+  ]);
 
   const exportExcel = useCallback(async () => {
     if (!isPro) {
@@ -389,7 +435,10 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
       showAlert({
         icon: '📤',
         title: 'Couldn’t export',
-        message: userFacingError(e, 'Couldn’t create the Excel file. Please try again.'),
+        message: userFacingError(
+          e,
+          'Couldn’t create the Excel file. Please try again.',
+        ),
       });
     } finally {
       setExporting(false);
@@ -419,7 +468,10 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
       showAlert({
         icon: '📄',
         title: 'Couldn’t export',
-        message: userFacingError(e, 'Couldn’t create the PDF. Please try again.'),
+        message: userFacingError(
+          e,
+          'Couldn’t create the PDF. Please try again.',
+        ),
       });
     } finally {
       setExportingPdf(false);
@@ -441,7 +493,12 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <View style={[styles.root, { paddingTop: insets.top, backgroundColor: colors.background }]}>
+      <View
+        style={[
+          styles.root,
+          { paddingTop: insets.top, backgroundColor: colors.background },
+        ]}
+      >
         <View style={styles.header}>
           <Pressable onPress={onClose} hitSlop={12}>
             <Text style={styles.back}>‹ Back</Text>
@@ -451,7 +508,10 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
         </View>
 
         <ScrollView
-          contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 24 }]}
+          contentContainerStyle={[
+            styles.scroll,
+            { paddingBottom: insets.bottom + 24 },
+          ]}
           showsVerticalScrollIndicator={false}
         >
           <Text style={styles.section}>Security</Text>
@@ -464,15 +524,18 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
                     ? `PIN + ${bio?.label || 'biometric'} when opening Expenso`
                     : 'PIN required when opening Expenso'
                   : hasPin
-                    ? 'Lock is off — toggle to enable'
-                    : 'Protect the app with a PIN'
+                  ? 'Lock is off — toggle to enable'
+                  : 'Protect the app with a PIN'
               }
               pro={!isPro}
               right={
                 <Switch
                   value={enabled}
                   onValueChange={onToggleLock}
-                  trackColor={{ false: colors.border, true: colors.primary + '99' }}
+                  trackColor={{
+                    false: colors.border,
+                    true: colors.primary + '99',
+                  }}
                   thumbColor={enabled ? colors.primaryLight : colors.textMuted}
                 />
               }
@@ -502,9 +565,14 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
                     <Switch
                       value={biometricEnabled && enabled}
                       onValueChange={onToggleBiometric}
-                      trackColor={{ false: colors.border, true: colors.primary + '99' }}
+                      trackColor={{
+                        false: colors.border,
+                        true: colors.primary + '99',
+                      }}
                       thumbColor={
-                        biometricEnabled && enabled ? colors.primaryLight : colors.textMuted
+                        biometricEnabled && enabled
+                          ? colors.primaryLight
+                          : colors.textMuted
                       }
                     />
                   }
@@ -532,9 +600,14 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
                     <Switch
                       value={notifyPartnerOnMyJointAdd}
                       onValueChange={onToggleNotifyPartner}
-                      trackColor={{ false: colors.border, true: colors.primary + '99' }}
+                      trackColor={{
+                        false: colors.border,
+                        true: colors.primary + '99',
+                      }}
                       thumbColor={
-                        notifyPartnerOnMyJointAdd ? colors.primaryLight : colors.textMuted
+                        notifyPartnerOnMyJointAdd
+                          ? colors.primaryLight
+                          : colors.textMuted
                       }
                     />
                   }
@@ -547,9 +620,14 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
                     <Switch
                       value={notifyMeOnPartnerJointAdd}
                       onValueChange={onToggleNotifyMe}
-                      trackColor={{ false: colors.border, true: colors.primary + '99' }}
+                      trackColor={{
+                        false: colors.border,
+                        true: colors.primary + '99',
+                      }}
                       thumbColor={
-                        notifyMeOnPartnerJointAdd ? colors.primaryLight : colors.textMuted
+                        notifyMeOnPartnerJointAdd
+                          ? colors.primaryLight
+                          : colors.textMuted
                       }
                     />
                   }
@@ -562,14 +640,24 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
           <View style={styles.card}>
             <SettingsRow
               title="Export Excel"
-              subtitle={`${expenses.length} expense${expenses.length === 1 ? '' : 's'} · .xlsx file${isJoint ? ' · includes joint' : ''}`}
+              subtitle={`${expenses.length} expense${
+                expenses.length === 1 ? '' : 's'
+              } · .xlsx file${isJoint ? ' · includes joint' : ''}`}
               pro={!isPro}
               onPress={exportExcel}
               right={
                 exporting ? (
                   <ActivityIndicator color={colors.primaryLight} />
                 ) : (
-                  <Text style={{ fontSize: 22, color: colors.textMuted, fontWeight: '600' }}>›</Text>
+                  <Text
+                    style={{
+                      fontSize: 22,
+                      color: colors.textMuted,
+                      fontWeight: '600',
+                    }}
+                  >
+                    ›
+                  </Text>
                 )
               }
             />
@@ -583,7 +671,15 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
                 exportingPdf ? (
                   <ActivityIndicator color={colors.primaryLight} />
                 ) : (
-                  <Text style={{ fontSize: 22, color: colors.textMuted, fontWeight: '600' }}>›</Text>
+                  <Text
+                    style={{
+                      fontSize: 22,
+                      color: colors.textMuted,
+                      fontWeight: '600',
+                    }}
+                  >
+                    ›
+                  </Text>
                 )
               }
             />
@@ -601,7 +697,9 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
               title="Help & support"
               subtitle={
                 supportUnread > 0
-                  ? `${supportUnread} new reply${supportUnread === 1 ? '' : 's'} from support`
+                  ? `${supportUnread} new reply${
+                      supportUnread === 1 ? '' : 's'
+                    } from support`
                   : 'Open a ticket · track replies here'
               }
               onPress={() => setSupportOpen(true)}
@@ -618,7 +716,9 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
                       paddingHorizontal: 6,
                     }}
                   >
-                    <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '800' }}>
+                    <Text
+                      style={{ color: '#FFF', fontSize: 12, fontWeight: '800' }}
+                    >
                       {supportUnread > 9 ? '9+' : supportUnread}
                     </Text>
                   </View>
@@ -633,12 +733,28 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
             />
           </View>
 
+          {Platform.OS === 'android' ? (
+            <>
+              <Text style={styles.section}>Widget</Text>
+              <View style={styles.card}>
+                <SettingsRow
+                  title="Home screen widget"
+                  subtitle="Setup steps · quick add · voice · today’s total"
+                  onPress={() => setWidgetOpen(true)}
+                />
+              </View>
+            </>
+          ) : null}
+
           <Text style={styles.section}>Look & feel</Text>
           <Pressable
             onPress={() => setThemesOpen(true)}
             accessibilityRole="button"
             accessibilityLabel="Custom themes"
-            style={({ pressed }) => [styles.themesCtaWrap, pressed && styles.themesCtaPressed]}
+            style={({ pressed }) => [
+              styles.themesCtaWrap,
+              pressed && styles.themesCtaPressed,
+            ]}
           >
             <LinearGradient
               colors={[
@@ -660,19 +776,18 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
                       colors={[a, b]}
                       start={{ x: 0, y: 0 }}
                       end={{ x: 1, y: 1 }}
-                      style={[styles.swatch, { marginLeft: i === 0 ? 0 : -10, zIndex: 5 - i }]}
+                      style={[
+                        styles.swatch,
+                        { marginLeft: i === 0 ? 0 : -10, zIndex: 5 - i },
+                      ]}
                     />
                   ))}
                 </View>
-                {!isPro ? (
-                  <View style={styles.themesProPill}>
-                    <Text style={styles.themesProText}>PRO PACKS</Text>
-                  </View>
-                ) : (
-                  <View style={[styles.themesProPill, styles.themesLivePill]}>
-                    <Text style={[styles.themesProText, styles.themesLiveText]}>ACTIVE</Text>
-                  </View>
-                )}
+                <View style={[styles.themesProPill, styles.themesLivePill]}>
+                  <Text style={[styles.themesProText, styles.themesLiveText]}>
+                    THEMES
+                  </Text>
+                </View>
               </View>
 
               <Text style={styles.themesTitle}>Custom themes</Text>
@@ -696,8 +811,8 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
           </Pressable>
 
           <Text style={styles.footerNote}>
-            Excel (.xlsx) and PDF open in Sheets / Drive / WhatsApp as real files. PIN &
-            biometric stay on this device only.
+            Excel (.xlsx) and PDF open in Sheets / Drive / WhatsApp as real
+            files. PIN & biometric stay on this device only.
           </Text>
 
           <Text style={styles.section}>Legal</Text>
@@ -759,6 +874,7 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
       />
 
       <ThemesScreen visible={themesOpen} onClose={() => setThemesOpen(false)} />
+      <WidgetScreen visible={widgetOpen} onClose={() => setWidgetOpen(false)} />
 
       <Modal
         visible={pinModal}
@@ -776,12 +892,15 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
             </Text>
             {pendingBioAfterPin ? (
               <Text style={[styles.pinHint, { color: colors.textSecondary }]}>
-                Set this PIN first so {bio?.label || 'biometric'} unlock can turn on. It also
-                stays as your backup if biometrics fail.
+                Set this PIN first so {bio?.label || 'biometric'} unlock can
+                turn on. It also stays as your backup if biometrics fail.
               </Text>
             ) : null}
             <TextInput
-              style={[styles.pinInput, { color: colors.text, borderColor: colors.border }]}
+              style={[
+                styles.pinInput,
+                { color: colors.text, borderColor: colors.border },
+              ]}
               value={pin}
               onChangeText={setPinInput}
               keyboardType="number-pad"
@@ -791,7 +910,10 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
               placeholderTextColor={colors.textMuted}
             />
             <TextInput
-              style={[styles.pinInput, { color: colors.text, borderColor: colors.border }]}
+              style={[
+                styles.pinInput,
+                { color: colors.text, borderColor: colors.border },
+              ]}
               value={pin2}
               onChangeText={setPin2}
               keyboardType="number-pad"
@@ -807,10 +929,16 @@ export function SettingsScreen({ visible, onClose }: SettingsScreenProps) {
                   setPinModal(false);
                 }}
               >
-                <Text style={{ color: colors.textSecondary, fontWeight: '600' }}>Cancel</Text>
+                <Text
+                  style={{ color: colors.textSecondary, fontWeight: '600' }}
+                >
+                  Cancel
+                </Text>
               </Pressable>
               <Pressable onPress={savePin}>
-                <Text style={{ color: colors.primaryLight, fontWeight: '700' }}>Save</Text>
+                <Text style={{ color: colors.primaryLight, fontWeight: '700' }}>
+                  Save
+                </Text>
               </Pressable>
             </View>
           </View>
@@ -840,7 +968,12 @@ function rowStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderWidth: 1,
       borderColor: colors.warning + '66',
     },
-    proText: { fontSize: 10, fontWeight: '800', color: colors.warning, letterSpacing: 0.6 },
+    proText: {
+      fontSize: 10,
+      fontWeight: '800',
+      color: colors.warning,
+      letterSpacing: 0.6,
+    },
   });
 }
 

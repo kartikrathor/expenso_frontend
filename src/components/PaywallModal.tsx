@@ -61,6 +61,7 @@ export function PaywallModal() {
   const subscribe = useProStore(s => s.subscribe);
   const restorePurchases = useProStore(s => s.restorePurchases);
   const purchaseTheme = useProStore(s => s.purchaseTheme);
+  const restoreTheme = useProStore(s => s.restoreTheme);
 
   const [busy, setBusy] = useState<
     'monthly' | 'yearly' | 'theme_m' | 'theme_p' | 'restore' | null
@@ -79,7 +80,7 @@ export function PaywallModal() {
     ? `Unlock ${themeMeta?.name || 'theme'}`
     : REASON_COPY[paywall.reason as Exclude<PaywallReason, 'theme'>].title;
   const body = isTheme
-    ? 'Preview is free. Choose a monthly trial or buy forever — prices set by Expenso.'
+    ? 'Preview is free. Subscribe monthly or unlock it forever through your app store.'
     : REASON_COPY[paywall.reason as Exclude<PaywallReason, 'theme'>].body;
 
   const monthly = catalog?.monthlyPrice ?? 49;
@@ -101,9 +102,19 @@ export function PaywallModal() {
   };
 
   return (
-    <Modal visible transparent animationType="fade" onRequestClose={closePaywall}>
+    <Modal
+      visible
+      transparent
+      animationType="fade"
+      onRequestClose={closePaywall}
+    >
       <View style={styles.backdrop}>
-        <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: colors.surface, borderColor: colors.border },
+          ]}
+        >
           <LinearGradient
             colors={[...actionGradient]}
             {...(gradientPoints
@@ -116,12 +127,21 @@ export function PaywallModal() {
             <Text style={styles.heroBody}>{body}</Text>
           </LinearGradient>
 
-          <ScrollView contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+          <ScrollView
+            contentContainerStyle={styles.body}
+            showsVerticalScrollIndicator={false}
+          >
             {!isTheme ? (
               <>
-                <Text style={styles.perk}>✦ Ask Expenso — {tokens} tokens / day</Text>
-                <Text style={styles.perk}>✦ Analytics arrows & custom dates</Text>
-                <Text style={styles.perk}>✦ App Lock, biometrics, Excel & PDF</Text>
+                <Text style={styles.perk}>
+                  ✦ Ask Expenso — {tokens} tokens / day
+                </Text>
+                <Text style={styles.perk}>
+                  ✦ Analytics arrows & custom dates
+                </Text>
+                <Text style={styles.perk}>
+                  ✦ App Lock, biometrics, Excel & PDF
+                </Text>
 
                 <Pressable
                   style={styles.primaryBtn}
@@ -154,10 +174,17 @@ export function PaywallModal() {
                     <ActivityIndicator color={colors.primaryLight} />
                   ) : (
                     <>
-                      <Text style={[styles.secondaryText, { color: colors.text }]}>
+                      <Text
+                        style={[styles.secondaryText, { color: colors.text }]}
+                      >
                         {monthlyLabel}
                       </Text>
-                      <Text style={[styles.secondaryPrice, { color: colors.primaryLight }]}>
+                      <Text
+                        style={[
+                          styles.secondaryPrice,
+                          { color: colors.primaryLight },
+                        ]}
+                      >
                         ₹{monthly}/month
                       </Text>
                     </>
@@ -165,7 +192,8 @@ export function PaywallModal() {
                 </Pressable>
 
                 <Text style={[styles.storeHint, { color: colors.textMuted }]}>
-                  Payment via {Platform.OS === 'ios' ? 'App Store' : 'Google Play'}. Cancel
+                  Payment via{' '}
+                  {Platform.OS === 'ios' ? 'App Store' : 'Google Play'}. Cancel
                   anytime in store subscriptions.
                 </Text>
 
@@ -193,7 +221,12 @@ export function PaywallModal() {
                   {busy === 'restore' ? (
                     <ActivityIndicator color={colors.primaryLight} />
                   ) : (
-                    <Text style={[styles.restoreText, { color: colors.primaryLight }]}>
+                    <Text
+                      style={[
+                        styles.restoreText,
+                        { color: colors.primaryLight },
+                      ]}
+                    >
                       Restore purchases
                     </Text>
                   )}
@@ -224,7 +257,9 @@ export function PaywallModal() {
                       <ActivityIndicator color="#FFF" />
                     ) : (
                       <>
-                        <Text style={styles.primaryText}>Monthly trial</Text>
+                        <Text style={styles.primaryText}>
+                          {themePrice?.monthlyLabel || 'Monthly access'}
+                        </Text>
                         <Text style={styles.primaryPrice}>
                           ₹{themePrice?.monthlyPrice ?? 19}/month
                         </Text>
@@ -247,22 +282,59 @@ export function PaywallModal() {
                     <ActivityIndicator color={colors.primaryLight} />
                   ) : (
                     <>
-                      <Text style={[styles.secondaryText, { color: colors.text }]}>
-                        Buy forever
+                      <Text
+                        style={[styles.secondaryText, { color: colors.text }]}
+                      >
+                        {themePrice?.permanentLabel || 'Buy forever'}
                       </Text>
-                      <Text style={[styles.secondaryPrice, { color: colors.primaryLight }]}>
+                      <Text
+                        style={[
+                          styles.secondaryPrice,
+                          { color: colors.primaryLight },
+                        ]}
+                      >
                         ₹{themePrice?.permanentPrice ?? 37} one-time
                       </Text>
                     </>
                   )}
                 </Pressable>
+                <Text style={[styles.storeHint, { color: colors.textMuted }]}>
+                  Final localized price and payment are confirmed by{' '}
+                  {Platform.OS === 'ios' ? 'App Store' : 'Google Play'}.
+                </Text>
+                <Pressable
+                  disabled={!!busy}
+                  onPress={() =>
+                    run(() => restoreTheme(paywall.themePackId!), 'restore')
+                  }
+                  style={styles.restoreBtn}
+                >
+                  {busy === 'restore' ? (
+                    <ActivityIndicator color={colors.primaryLight} />
+                  ) : (
+                    <Text
+                      style={[
+                        styles.restoreText,
+                        { color: colors.primaryLight },
+                      ]}
+                    >
+                      Restore this theme
+                    </Text>
+                  )}
+                </Pressable>
               </>
             )}
 
-            {error ? <Text style={[styles.error, { color: colors.danger }]}>{error}</Text> : null}
+            {error ? (
+              <Text style={[styles.error, { color: colors.danger }]}>
+                {error}
+              </Text>
+            ) : null}
 
             <Pressable onPress={closePaywall} style={styles.dismiss}>
-              <Text style={[styles.dismissText, { color: colors.textMuted }]}>Not now</Text>
+              <Text style={[styles.dismissText, { color: colors.textMuted }]}>
+                Not now
+              </Text>
             </Pressable>
           </ScrollView>
         </View>
@@ -327,7 +399,11 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       gap: 2,
     },
     primaryText: { ...Typography.bodyBold, color: '#FFF' },
-    primaryPrice: { ...Typography.caption, color: '#FFFFFFCC', fontWeight: '700' },
+    primaryPrice: {
+      ...Typography.caption,
+      color: '#FFFFFFCC',
+      fontWeight: '700',
+    },
     secondaryBtn: {
       marginTop: Spacing.sm,
       borderRadius: Radius.lg,
@@ -359,7 +435,11 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       alignItems: 'center',
     },
     restoreText: { ...Typography.caption, fontWeight: '700' },
-    error: { ...Typography.caption, marginTop: Spacing.sm, textAlign: 'center' },
+    error: {
+      ...Typography.caption,
+      marginTop: Spacing.sm,
+      textAlign: 'center',
+    },
     dismiss: { paddingVertical: Spacing.md, alignItems: 'center' },
     dismissText: { ...Typography.bodyBold },
   });

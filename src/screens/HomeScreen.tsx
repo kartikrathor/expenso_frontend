@@ -148,6 +148,8 @@ export function HomeScreen() {
   const listRef = useRef<FlatList<Expense>>(null);
   const searchYRef = useRef(0);
   const searchFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** One-shot: wrong device clock / empty current month → jump to latest expense period. */
+  const didAutoJumpPeriod = useRef(false);
   const loadingMoreRef = useRef(false);
   const loadMoreTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -212,6 +214,33 @@ export function HomeScreen() {
     if (filter === 'all') return householdExpenses;
     return periodBuckets[filter].get(periodBucketKey(filter, periodAnchor)) ?? [];
   }, [filter, householdExpenses, periodAnchor, periodBuckets]);
+
+  // Home defaults to "this month". If the device clock is wrong (common on
+  // emulators) or the current period is empty after sync, jump once to the
+  // newest expense's period so data isn't mistaken for "missing".
+  useEffect(() => {
+    if (didAutoJumpPeriod.current) return;
+    if (filter === 'all' || householdExpenses.length === 0) return;
+    if (filtered.length > 0) {
+      didAutoJumpPeriod.current = true;
+      return;
+    }
+    const latest = [...householdExpenses].sort(
+      (a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0),
+    )[0];
+    if (!latest) return;
+    const latestDate = parseISO(latest.date);
+    if (Number.isNaN(latestDate.getTime())) return;
+    const currentKey = periodBucketKey(filter, periodAnchor);
+    const latestKey = periodBucketKey(filter, latestDate);
+    if (currentKey === latestKey) {
+      didAutoJumpPeriod.current = true;
+      return;
+    }
+    didAutoJumpPeriod.current = true;
+    setPeriodAnchor(latestDate);
+  }, [filter, filtered.length, householdExpenses, periodAnchor]);
+
   const displayedExpenses = useMemo(() => {
     if (!deferredSearch) return filtered;
     return householdExpenses.filter(expense => (

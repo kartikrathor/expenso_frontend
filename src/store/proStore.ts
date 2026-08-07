@@ -3,9 +3,12 @@ import { Platform } from 'react-native';
 import { create } from 'zustand';
 import { apiRequest } from '../services/api';
 import { useAuthStore } from './authStore';
+import { useThemeStore } from './themeStore';
 import {
   DEFAULT_PRO_SKUS,
   purchaseProSubscription,
+  purchaseThemePack,
+  restoreThemePack,
   restoreProPurchases,
 } from '../services/iap';
 
@@ -34,7 +37,24 @@ export type ThemePrice = {
   monthlyPrice: number;
   permanentPrice: number;
   currency: string;
+  includedInPro: boolean;
+  monthlyLabel?: string;
+  permanentLabel?: string;
+  subtitle?: string;
+  androidMonthlySku?: string;
+  androidPermanentSku?: string;
+  iosMonthlySku?: string;
+  iosPermanentSku?: string;
 };
+
+const DEFAULT_PRO_THEME_PACKS = new Set(['mint', 'midnight_gold', 'rose']);
+
+async function enforceCurrentThemeAccess(canUse: (packId: string) => boolean) {
+  const theme = useThemeStore.getState();
+  if (theme.packId !== 'ocean' && !canUse(theme.packId)) {
+    await theme.setPackId('ocean', true);
+  }
+}
 
 export type PaywallReason =
   | 'ask_ai'
@@ -70,7 +90,9 @@ interface ProStore {
   paywall: PaywallState;
   loadPro: () => Promise<void>;
   /** Apply Pro from login /auth/me — avoids race before /api/pro/me */
-  applyEntitlement: (entitlement: Partial<ProEntitlement> | null | undefined) => Promise<void>;
+  applyEntitlement: (
+    entitlement: Partial<ProEntitlement> | null | undefined,
+  ) => Promise<void>;
   clearEntitlement: () => Promise<void>;
   refreshEntitlement: () => Promise<void>;
   openPaywall: (reason: PaywallReason, themePackId?: string) => void;
@@ -78,7 +100,11 @@ interface ProStore {
   /** Launch Google Play / App Store IAP, then verify on server */
   subscribe: (plan: 'monthly' | 'yearly') => Promise<void>;
   restorePurchases: () => Promise<void>;
-  purchaseTheme: (packId: string, kind: 'monthly' | 'permanent') => Promise<void>;
+  purchaseTheme: (
+    packId: string,
+    kind: 'monthly' | 'permanent',
+  ) => Promise<void>;
+  restoreTheme: (packId: string) => Promise<void>;
   canUseThemePack: (packId: string) => boolean;
 }
 
@@ -91,7 +117,10 @@ function normalizeEntitlement(
 ): ProEntitlement {
   return {
     isPro: !!entitlement?.isPro,
-    plan: entitlement?.plan === 'monthly' || entitlement?.plan === 'yearly' ? entitlement.plan : null,
+    plan:
+      entitlement?.plan === 'monthly' || entitlement?.plan === 'yearly'
+        ? entitlement.plan
+        : null,
     expiresAt: entitlement?.expiresAt || null,
     ownedThemePacks: Array.isArray(entitlement?.ownedThemePacks)
       ? entitlement!.ownedThemePacks!
@@ -142,6 +171,7 @@ export const useProStore = create<ProStore>((set, get) => ({
         catalog: catalog.pro,
         themePrices: catalog.themes || [],
       });
+      await enforceCurrentThemeAccess(get().canUseThemePack);
     } catch {
       // offline — keep defaults
     }
@@ -155,6 +185,7 @@ export const useProStore = create<ProStore>((set, get) => ({
     const next = normalizeEntitlement(entitlement);
     set(next);
     await cacheEntitlement(next);
+    await enforceCurrentThemeAccess(get().canUseThemePack);
     if (next.isPro) {
       set({ paywall: { visible: false, reason: get().paywall.reason } });
     }
@@ -194,8 +225,9 @@ export const useProStore = create<ProStore>((set, get) => ({
   },
 
   openPaywall: (reason, themePackId) => {
-    // Already Pro — never show upgrade / theme paywalls
-    if (get().isPro) return;
+    if (reason !== 'theme' && get().isPro) return;
+    if (reason === 'theme' && themePackId && get().canUseThemePack(themePackId))
+      return;
     set({ paywall: { visible: true, reason, themePackId } });
   },
 
@@ -224,19 +256,50 @@ export const useProStore = create<ProStore>((set, get) => ({
   purchaseTheme: async (packId, kind) => {
     const token = useAuthStore.getState().token;
     if (!token) throw new Error('Please sign in again.');
-    await apiRequest('/api/pro/themes/purchase', {
-      method: 'POST',
-      token,
-      body: { packId, kind },
-    });
+    const theme = get().themePrices.find(t => t.packId === packId);
+    if (!theme) throw new Error('This theme is not available right now.');
+    const skus =
+      Platform.OS === 'ios'
+        ? {
+            monthly: theme.iosMonthlySku || '',
+            permanent: theme.iosPermanentSku || '',
+          }
+        : {
+            monthly: theme.androidMonthlySku || '',
+            permanent: theme.androidPermanentSku || '',
+          };
+    await purchaseThemePack(kind, skus);
+    await get().refreshEntitlement();
+    set({ paywall: { visible: false, reason: get().paywall.reason } });
+  },
+
+  restoreTheme: async packId => {
+    const token = useAuthStore.getState().token;
+    if (!token) throw new Error('Please sign in again.');
+    const theme = get().themePrices.find(t => t.packId === packId);
+    if (!theme) throw new Error('This theme is not available right now.');
+    const skus =
+      Platform.OS === 'ios'
+        ? {
+            monthly: theme.iosMonthlySku || '',
+            permanent: theme.iosPermanentSku || '',
+          }
+        : {
+            monthly: theme.androidMonthlySku || '',
+            permanent: theme.androidPermanentSku || '',
+          };
+    await restoreThemePack(skus);
     await get().refreshEntitlement();
     set({ paywall: { visible: false, reason: get().paywall.reason } });
   },
 
   canUseThemePack: packId => {
     if (packId === 'ocean') return true;
-    // Pro plan unlocks all color packs (matches in-app copy)
-    if (get().isPro) return true;
-    return get().ownedThemePacks.includes(packId);
+    if (get().ownedThemePacks.includes(packId)) return true;
+    const remote = get().themePrices.find(t => t.packId === packId);
+    const includedInPro = remote
+      ? remote.includedInPro === true
+      : DEFAULT_PRO_THEME_PACKS.has(packId);
+    return get().isPro && includedInPro;
   },
 }));

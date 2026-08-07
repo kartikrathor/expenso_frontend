@@ -14,11 +14,9 @@ import { Spacing, Typography, Radius } from '../constants/theme';
 import {
   THEME_PACKS,
   CHART_PALETTES,
-  GRADIENT_STYLES,
   AppearanceMode,
   ThemePackId,
   ChartPaletteId,
-  GradientStyleId,
 } from '../constants/themePacks';
 import { APP_ICON_PREVIEWS } from '../constants/appIcons';
 import { closeAppForIconRefresh } from '../native/appIcon';
@@ -42,18 +40,17 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
     appearance,
     packId,
     chartPalette,
-    gradientStyle,
     gradientPoints,
     setAppearance,
     setPackId,
     setChartPalette,
-    setGradientStyle,
     resetToDefaults,
     actionGradient,
   } = useTheme();
   const isPro = useProStore(s => s.isPro);
   const openPaywall = useProStore(s => s.openPaywall);
   const canUseThemePack = useProStore(s => s.canUseThemePack);
+  const themePrices = useProStore(s => s.themePrices);
   const iconPackId = useAppIconStore(s => s.iconPackId);
   const iconSupported = useAppIconStore(s => s.supported);
   const loadAppIcon = useAppIconStore(s => s.load);
@@ -89,7 +86,9 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
                 if (!ok) {
                   setAlert({
                     icon: '⚠️',
-                    title: iconSupported ? 'Couldn’t change icon' : 'Rebuild required',
+                    title: iconSupported
+                      ? 'Couldn’t change icon'
+                      : 'Rebuild required',
                     message: iconSupported
                       ? 'Could not switch the launcher icon on this device.'
                       : 'Native icon module is missing. Rebuild the Android app and try again.',
@@ -154,23 +153,12 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
     [isPro, openPaywall, setChartPalette],
   );
 
-  const onPickGradient = useCallback(
-    async (id: GradientStyleId, pro: boolean) => {
-      if (pro && !isPro) {
-        openPaywall('analytics_nav');
-        return;
-      }
-      await setGradientStyle(id, true);
-    },
-    [isPro, openPaywall, setGradientStyle],
-  );
-
   const onResetDefaults = useCallback(() => {
     setAlert({
       icon: '↺',
       title: 'Reset themes?',
       message:
-        'This restores Default pack, Default chart colors, Default gradient, Dark appearance, and the default app icon.',
+        'This restores Default pack, Default chart colors, Dark appearance, and the default app icon.',
       buttons: [
         { label: 'Cancel', variant: 'secondary' },
         {
@@ -240,10 +228,7 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
             {packId === 'red_web_spider' ? (
               <>
                 <SpiderWebBackground variant="hero" opacity={0.34} />
-                <BlackSpiderMark
-                  size={32}
-                  style={{ top: 10, right: 12 }}
-                />
+                <BlackSpiderMark size={32} style={{ top: 10, right: 12 }} />
               </>
             ) : null}
             <View style={styles.previewContent}>
@@ -256,7 +241,10 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
               </Text>
               <View style={styles.previewDots}>
                 {colors.chartColors.slice(0, 5).map(c => (
-                  <View key={c} style={[styles.previewDot, { backgroundColor: c }]} />
+                  <View
+                    key={c}
+                    style={[styles.previewDot, { backgroundColor: c }]}
+                  />
                 ))}
               </View>
             </View>
@@ -273,7 +261,12 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
                     style={[styles.segment, active && styles.segmentActive]}
                     onPress={() => void setAppearance(a.id)}
                   >
-                    <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                    <Text
+                      style={[
+                        styles.segmentText,
+                        active && styles.segmentTextActive,
+                      ]}
+                    >
                       {a.label}
                     </Text>
                   </Pressable>
@@ -286,7 +279,12 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
           <View style={styles.packGrid}>
             {THEME_PACKS.map(pack => {
               const selected = packId === pack.id;
-              const locked = pack.pro && !canUseThemePack(pack.id);
+              const locked = pack.id !== 'ocean' && !canUseThemePack(pack.id);
+              const remote = themePrices.find(t => t.packId === pack.id);
+              const includedInPro =
+                remote?.includedInPro === true ||
+                (!remote &&
+                  ['mint', 'midnight_gold', 'rose'].includes(pack.id));
               return (
                 <Pressable
                   key={pack.id}
@@ -306,7 +304,11 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
                     {pack.name}
                   </Text>
                   <Text style={styles.packSub} numberOfLines={1}>
-                    {pack.pro ? 'Pro' : 'Free'}
+                    {pack.id === 'ocean'
+                      ? 'Free'
+                      : includedInPro
+                      ? 'Included with Pro'
+                      : 'Buy separately'}
                   </Text>
                 </Pressable>
               );
@@ -342,12 +344,17 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
                         {p.preview.map(c => (
                           <View
                             key={`${p.id}-${c}`}
-                            style={[styles.paletteSwatch, { backgroundColor: c }]}
+                            style={[
+                              styles.paletteSwatch,
+                              { backgroundColor: c },
+                            ]}
                           />
                         ))}
                       </View>
                     </View>
-                    <Text style={styles.chevron}>{locked ? '🔒' : selected ? '✓' : '›'}</Text>
+                    <Text style={styles.chevron}>
+                      {locked ? '🔒' : selected ? '✓' : '›'}
+                    </Text>
                   </Pressable>
                 </View>
               );
@@ -356,7 +363,7 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
 
           <Text style={styles.section}>App icon</Text>
           <Text style={styles.sectionHint}>
-            Choose a home screen icon. Pro themes need Pro to apply.
+            Choose a home screen icon. Access follows the matching theme pack.
           </Text>
           <View style={styles.iconGrid}>
             {THEME_PACKS.map(pack => {
@@ -380,7 +387,9 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
                       </View>
                     ) : null}
                     {iconActive ? (
-                      <View style={[styles.packIconBadge, styles.packIconBadgeHome]}>
+                      <View
+                        style={[styles.packIconBadge, styles.packIconBadgeHome]}
+                      >
                         <Text style={styles.packIconBadgeText}>✓</Text>
                       </View>
                     ) : null}
@@ -393,73 +402,10 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
             })}
           </View>
 
-          <Text style={styles.section}>Gradient style</Text>
-          <View style={styles.card}>
-            {GRADIENT_STYLES.map((g, idx) => {
-              const selected = gradientStyle === g.id;
-              const locked = g.pro && !isPro;
-              return (
-                <View key={g.id}>
-                  {idx > 0 ? <View style={styles.divider} /> : null}
-                  <Pressable
-                    style={styles.row}
-                    onPress={() => void onPickGradient(g.id, g.pro)}
-                  >
-                    <View style={styles.rowCopy}>
-                      <View style={styles.titleRow}>
-                        <Text style={styles.rowTitle}>{g.name}</Text>
-                        {g.pro ? (
-                          <View style={styles.proPill}>
-                            <Text style={styles.proText}>PRO</Text>
-                          </View>
-                        ) : null}
-                        {selected ? (
-                          <Text style={styles.selectedMark}>Selected</Text>
-                        ) : null}
-                      </View>
-                      <Text style={styles.rowSub}>{g.subtitle}</Text>
-                    </View>
-                    <Text style={styles.chevron}>{locked ? '🔒' : selected ? '✓' : '›'}</Text>
-                  </Pressable>
-                </View>
-              );
-            })}
-          </View>
-
-          <Text style={styles.section}>Home widgets</Text>
-          <View style={styles.card}>
-            <View style={styles.widgetPreview}>
-              <View style={styles.widgetPreviewTop}>
-                <Text style={styles.widgetBrand}>Expenso</Text>
-                <Text style={styles.widgetTitle}>Sync</Text>
-              </View>
-              <Text style={styles.widgetTodayLabel}>TODAY</Text>
-              <Text style={styles.widgetAmount}>₹840</Text>
-              <Text style={styles.widgetSub}>LAST EXPENSES</Text>
-              <Text style={styles.widgetRow}>Blinkit          ₹200</Text>
-              <Text style={styles.widgetRow}>Swiggy           ₹350</Text>
-              <View style={styles.widgetAddBtn}>
-                <Text style={styles.widgetAddText}>+ Add expense</Text>
-              </View>
-              <View style={styles.widgetActions}>
-                <View style={styles.widgetActionChip}>
-                  <Text style={styles.widgetActionText}>🎙 Speak</Text>
-                </View>
-                <View style={styles.widgetActionChip}>
-                  <Text style={[styles.widgetActionText, { color: colors.accent }]}>Today</Text>
-                </View>
-              </View>
-            </View>
-            <Text style={styles.widgetNote}>
-              Matches Default theme. Add to type, Speak for voice (opens hold-to-talk), Today
-              shows today’s total. Sync pulls from server.
-            </Text>
-          </View>
-
           <View style={styles.resetCard}>
             <Text style={styles.resetTitle}>Reset themes</Text>
             <Text style={styles.resetSub}>
-              Restore Default pack, Default chart colors, Default gradient, and Dark mode.
+              Restore Default pack, Default chart colors, and Dark mode.
             </Text>
             <Pressable style={styles.resetBtn} onPress={onResetDefaults}>
               <Text style={styles.resetBtnText}>Reset to defaults</Text>
@@ -469,22 +415,10 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
           <View style={styles.proCard}>
             <Text style={styles.proCardTitle}>Theme unlocks</Text>
             <Text style={styles.proCardSub}>
-              Preview any pack freely. To keep it after you leave, buy monthly or forever —
-              prices come from Admin. Chart & gradient extras need Expenso Pro.
+              Default is free. Pro includes Mint Money, Midnight Gold and Rose.
+              Other packs can be unlocked monthly or bought once; availability
+              and display pricing come from Admin.
             </Text>
-            {!isPro ? (
-              <Pressable style={styles.proBtn} onPress={() => openPaywall('analytics_nav')}>
-                <LinearGradient
-                  colors={[...actionGradient]}
-                  {...(gradientPoints
-                    ? { start: gradientPoints.start, end: gradientPoints.end }
-                    : { start: { x: 0, y: 0 }, end: { x: 1, y: 0 } })}
-                  style={styles.proBtnGrad}
-                >
-                  <Text style={styles.proBtnText}>See Pro plans</Text>
-                </LinearGradient>
-              </Pressable>
-            ) : null}
           </View>
         </ScrollView>
       </View>
@@ -724,7 +658,12 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       paddingVertical: Spacing.md,
     },
     rowCopy: { flex: 1 },
-    titleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flexWrap: 'wrap' },
+    titleRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: Spacing.sm,
+      flexWrap: 'wrap',
+    },
     rowTitle: { ...Typography.bodyBold, color: colors.text },
     rowSub: { ...Typography.caption, color: colors.textMuted, marginTop: 2 },
     selectedMark: {
@@ -777,7 +716,11 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       color: colors.primaryLight,
       fontWeight: '700',
     },
-    widgetTitle: { ...Typography.small, color: colors.accent, fontWeight: '600' },
+    widgetTitle: {
+      ...Typography.small,
+      color: colors.accent,
+      fontWeight: '600',
+    },
     widgetTodayLabel: {
       ...Typography.small,
       color: colors.accent,
@@ -786,7 +729,12 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       fontSize: 10,
     },
     widgetAmount: { ...Typography.h2, color: colors.text, marginTop: 2 },
-    widgetSub: { ...Typography.caption, color: colors.textMuted, fontWeight: '700', marginTop: 8 },
+    widgetSub: {
+      ...Typography.caption,
+      color: colors.textMuted,
+      fontWeight: '700',
+      marginTop: 8,
+    },
     widgetRow: {
       ...Typography.caption,
       color: colors.text,
@@ -814,7 +762,11 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderColor: colors.border,
       alignItems: 'center',
     },
-    widgetActionText: { ...Typography.caption, color: colors.text, fontWeight: '700' },
+    widgetActionText: {
+      ...Typography.caption,
+      color: colors.text,
+      fontWeight: '700',
+    },
     widgetNote: {
       ...Typography.caption,
       color: colors.textMuted,
@@ -861,7 +813,11 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       color: colors.textSecondary,
       lineHeight: 18,
     },
-    proBtn: { borderRadius: Radius.lg, overflow: 'hidden', marginTop: Spacing.sm },
+    proBtn: {
+      borderRadius: Radius.lg,
+      overflow: 'hidden',
+      marginTop: Spacing.sm,
+    },
     proBtnGrad: {
       paddingVertical: Spacing.md,
       alignItems: 'center',
