@@ -7,10 +7,12 @@ import { useThemeStore } from './themeStore';
 import {
   DEFAULT_PRO_SKUS,
   DEFAULT_THEME_SKUS,
+  fetchStoreDisplayPrices,
   purchaseProSubscription,
   purchaseThemePack,
   restoreThemePack,
   restoreProPurchases,
+  type StoreDisplayPrices,
 } from '../services/iap';
 
 const CACHE_KEY = '@expensewise_pro_entitlement';
@@ -19,6 +21,8 @@ export type ProCatalog = {
   name: string;
   monthlyPrice: number;
   yearlyPrice: number;
+  monthlyPriceFormatted?: string | null;
+  yearlyPriceFormatted?: string | null;
   currency: string;
   dailyTokens: number;
   monthlyLabel: string;
@@ -37,6 +41,8 @@ export type ThemePrice = {
   name: string;
   monthlyPrice: number;
   permanentPrice: number;
+  monthlyPriceFormatted?: string | null;
+  permanentPriceFormatted?: string | null;
   currency: string;
   includedInPro: boolean;
   monthlyLabel?: string;
@@ -85,10 +91,12 @@ interface ProStore {
   ownedThemePacks: string[];
   catalog: ProCatalog | null;
   themePrices: ThemePrice[];
+  /** Localized prices from the device store (preferred over catalog fallback). */
+  storeDisplayPrices: StoreDisplayPrices | null;
   isLoaded: boolean;
   paywall: PaywallState;
   loadPro: () => Promise<void>;
-  /** Re-fetch Admin theme/Pro catalog (prices + Free with Pro flags). */
+  /** Re-fetch Admin theme/Pro catalog + device store prices. */
   refreshCatalog: () => Promise<void>;
   /** Apply Pro from login /auth/me — avoids race before /api/pro/me */
   applyEntitlement: (
@@ -142,6 +150,20 @@ function skusFromCatalog(catalog: ProCatalog | null) {
   };
 }
 
+function themeSkusFromCatalog(themePrices: ThemePrice[]) {
+  const first = themePrices[0];
+  if (Platform.OS === 'ios') {
+    return {
+      monthly: first?.iosMonthlySku || DEFAULT_THEME_SKUS.monthly,
+      permanent: first?.iosPermanentSku || DEFAULT_THEME_SKUS.permanent,
+    };
+  }
+  return {
+    monthly: first?.androidMonthlySku || DEFAULT_THEME_SKUS.monthly,
+    permanent: first?.androidPermanentSku || DEFAULT_THEME_SKUS.permanent,
+  };
+}
+
 export const useProStore = create<ProStore>((set, get) => ({
   isPro: false,
   plan: null,
@@ -149,6 +171,7 @@ export const useProStore = create<ProStore>((set, get) => ({
   ownedThemePacks: [],
   catalog: null,
   themePrices: [],
+  storeDisplayPrices: null,
   isLoaded: false,
   paywall: { visible: false, reason: 'ask_ai' },
 
@@ -157,13 +180,23 @@ export const useProStore = create<ProStore>((set, get) => ({
       pro: ProCatalog | null;
       themes: ThemePrice[];
     }>('/api/pro/catalog');
+    const themePrices = (catalog.themes || []).map(t => ({
+      ...t,
+      includedInPro: t.includedInPro === true,
+    }));
     set({
       catalog: catalog.pro,
-      themePrices: (catalog.themes || []).map(t => ({
-        ...t,
-        includedInPro: t.includedInPro === true,
-      })),
+      themePrices,
     });
+    try {
+      const storeDisplayPrices = await fetchStoreDisplayPrices({
+        pro: skusFromCatalog(catalog.pro),
+        theme: themeSkusFromCatalog(themePrices),
+      });
+      set({ storeDisplayPrices });
+    } catch {
+      // Keep Play-region catalog fallbacks when billing client is unavailable.
+    }
     await enforceCurrentThemeAccess(get().canUseThemePack);
   },
 

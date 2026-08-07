@@ -55,6 +55,7 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
   const ownedThemePacks = useProStore(s => s.ownedThemePacks);
   const openPaywall = useProStore(s => s.openPaywall);
   const themePrices = useProStore(s => s.themePrices);
+  const storeDisplayPrices = useProStore(s => s.storeDisplayPrices);
   const iconPackId = useAppIconStore(s => s.iconPackId);
   const iconSupported = useAppIconStore(s => s.supported);
   const loadAppIcon = useAppIconStore(s => s.load);
@@ -118,13 +119,16 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
       if (remote?.includedInPro === true) {
         return { label: 'Pro', tone: 'pro' as const };
       }
-      const price = remote?.permanentPrice;
+      const price =
+        storeDisplayPrices?.themePermanent ||
+        remote?.permanentPriceFormatted ||
+        (remote?.permanentPrice != null ? `${remote.permanentPrice}` : null);
       return {
-        label: price != null ? `₹${price}` : 'Paid',
+        label: price || 'Paid',
         tone: 'paid' as const,
       };
     },
-    [ownedThemePacks, themePrices, isPro],
+    [ownedThemePacks, themePrices, isPro, storeDisplayPrices],
   );
 
   // If a locked pack was somehow saved earlier, snap back to Default.

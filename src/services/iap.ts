@@ -254,6 +254,69 @@ export const DEFAULT_THEME_SKUS: ThemeSkus = {
   permanent: 'com.kriovent.expenso.theme.permanent',
 };
 
+export type StoreDisplayPrices = {
+  proMonthly: string | null;
+  proYearly: string | null;
+  themeMonthly: string | null;
+  themePermanent: string | null;
+};
+
+function productDisplayPrice(product: any): string | null {
+  const raw =
+    product?.displayPrice ||
+    product?.localizedPrice ||
+    product?.price ||
+    null;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+function pickProduct(products: any[] | null | undefined, productId: string) {
+  return products?.find(
+    p => p.id === productId || p.productId === productId,
+  );
+}
+
+/** Localized prices from Google Play / App Store for the user's country. */
+export async function fetchStoreDisplayPrices(opts: {
+  pro: ProSkus;
+  theme: ThemeSkus;
+}): Promise<StoreDisplayPrices> {
+  const empty: StoreDisplayPrices = {
+    proMonthly: null,
+    proYearly: null,
+    themeMonthly: null,
+    themePermanent: null,
+  };
+  try {
+    await ensureIapConnected();
+    const [subs, oneTime] = await Promise.all([
+      fetchProducts({
+        skus: [opts.pro.monthly, opts.pro.yearly, opts.theme.monthly].filter(
+          Boolean,
+        ),
+        type: 'subs',
+      }) as Promise<any[] | null>,
+      fetchProducts({
+        skus: [opts.theme.permanent].filter(Boolean),
+        type: 'in-app',
+      }) as Promise<any[] | null>,
+    ]);
+    return {
+      proMonthly: productDisplayPrice(pickProduct(subs, opts.pro.monthly)),
+      proYearly: productDisplayPrice(pickProduct(subs, opts.pro.yearly)),
+      themeMonthly: productDisplayPrice(
+        pickProduct(subs, opts.theme.monthly),
+      ),
+      themePermanent: productDisplayPrice(
+        pickProduct(oneTime, opts.theme.permanent),
+      ),
+    };
+  } catch (err) {
+    if (__DEV__) console.warn('[IAP] fetchStoreDisplayPrices failed', err);
+    return empty;
+  }
+}
+
 export async function purchaseThemePack(
   kind: 'monthly' | 'permanent',
   skus: ThemeSkus,

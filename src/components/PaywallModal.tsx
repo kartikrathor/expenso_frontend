@@ -69,6 +69,7 @@ export function PaywallModal() {
   const paywall = useProStore(s => s.paywall);
   const catalog = useProStore(s => s.catalog);
   const themePrices = useProStore(s => s.themePrices);
+  const storeDisplayPrices = useProStore(s => s.storeDisplayPrices);
   const closePaywall = useProStore(s => s.closePaywall);
   const subscribe = useProStore(s => s.subscribe);
   const restorePurchases = useProStore(s => s.restorePurchases);
@@ -116,11 +117,27 @@ export function PaywallModal() {
       : 'Preview is free. Unlock this pack with a one-time purchase (monthly also available).'
     : REASON_COPY[paywall.reason as Exclude<PaywallReason, 'theme'>].body;
 
-  const monthly = catalog?.monthlyPrice ?? 49;
-  const yearly = catalog?.yearlyPrice ?? 399;
   const monthlyLabel = catalog?.monthlyLabel || 'Pro Monthly';
   const yearlyLabel = catalog?.yearlyLabel || 'Pro Yearly';
   const tokens = catalog?.dailyTokens ?? 500;
+  const proMonthlyPrice =
+    storeDisplayPrices?.proMonthly ||
+    catalog?.monthlyPriceFormatted ||
+    (catalog?.monthlyPrice != null ? `${catalog.monthlyPrice}` : '—');
+  const proYearlyPrice =
+    storeDisplayPrices?.proYearly ||
+    catalog?.yearlyPriceFormatted ||
+    (catalog?.yearlyPrice != null ? `${catalog.yearlyPrice}` : '—');
+  const themePermanentPrice =
+    storeDisplayPrices?.themePermanent ||
+    themePrice?.permanentPriceFormatted ||
+    (themePrice?.permanentPrice != null
+      ? `${themePrice.permanentPrice}`
+      : '—');
+  const themeMonthlyPrice =
+    storeDisplayPrices?.themeMonthly ||
+    themePrice?.monthlyPriceFormatted ||
+    (themePrice?.monthlyPrice != null ? `${themePrice.monthlyPrice}` : '—');
 
   const run = async (fn: () => Promise<void>, key: typeof busy) => {
     setBusy(key);
@@ -219,7 +236,9 @@ export function PaywallModal() {
                     ) : (
                       <>
                         <Text style={styles.primaryText}>{yearlyLabel}</Text>
-                        <Text style={styles.primaryPrice}>₹{yearly}/year</Text>
+                        <Text style={styles.primaryPrice}>
+                          {proYearlyPrice}/year
+                        </Text>
                       </>
                     )}
                   </LinearGradient>
@@ -245,16 +264,16 @@ export function PaywallModal() {
                           { color: colors.primaryLight },
                         ]}
                       >
-                        ₹{monthly}/month
+                        {proMonthlyPrice}/month
                       </Text>
                     </>
                   )}
                 </Pressable>
 
                 <Text style={[styles.storeHint, { color: colors.textMuted }]}>
-                  Payment via{' '}
-                  {Platform.OS === 'ios' ? 'App Store' : 'Google Play'}. Cancel
-                  anytime in store subscriptions.
+                  Prices from{' '}
+                  {Platform.OS === 'ios' ? 'App Store' : 'Google Play'} in your
+                  local currency. Cancel anytime in store subscriptions.
                 </Text>
 
                 <Text style={[styles.legalLine, { color: colors.textMuted }]}>
@@ -320,7 +339,7 @@ export function PaywallModal() {
                           <>
                             <Text style={styles.primaryText}>{yearlyLabel}</Text>
                             <Text style={styles.primaryPrice}>
-                              ₹{yearly}/year
+                              {proYearlyPrice}/year
                             </Text>
                           </>
                         )}
@@ -354,7 +373,7 @@ export function PaywallModal() {
                               { color: colors.primaryLight },
                             ]}
                           >
-                            ₹{monthly}/month
+                            {proMonthlyPrice}/month
                           </Text>
                         </>
                       )}
@@ -395,7 +414,7 @@ export function PaywallModal() {
                             { color: colors.primaryLight },
                           ]}
                         >
-                          ₹{themePrice?.permanentPrice ?? 49} one-time
+                          {themePermanentPrice} one-time
                         </Text>
                       </>
                     )
@@ -414,7 +433,7 @@ export function PaywallModal() {
                             {themePrice?.permanentLabel || 'Buy forever'}
                           </Text>
                           <Text style={styles.primaryPrice}>
-                            ₹{themePrice?.permanentPrice ?? 49} one-time
+                            {themePermanentPrice} one-time
                           </Text>
                         </>
                       )}
@@ -447,13 +466,13 @@ export function PaywallModal() {
                           { color: colors.primaryLight },
                         ]}
                       >
-                        ₹{themePrice?.monthlyPrice ?? 14}/month
+                        {themeMonthlyPrice}/month
                       </Text>
                     </>
                   )}
                 </Pressable>
                 <Text style={[styles.storeHint, { color: colors.textMuted }]}>
-                  Final localized price and payment are confirmed by{' '}
+                  Prices shown in your local currency via{' '}
                   {Platform.OS === 'ios' ? 'App Store' : 'Google Play'}.
                 </Text>
                 <Pressable
