@@ -6,6 +6,7 @@ import { useAuthStore } from './authStore';
 import { useThemeStore } from './themeStore';
 import {
   DEFAULT_PRO_SKUS,
+  DEFAULT_THEME_SKUS,
   purchaseProSubscription,
   purchaseThemePack,
   restoreThemePack,
@@ -47,8 +48,6 @@ export type ThemePrice = {
   iosPermanentSku?: string;
 };
 
-const DEFAULT_PRO_THEME_PACKS = new Set(['mint', 'midnight_gold', 'rose']);
-
 async function enforceCurrentThemeAccess(canUse: (packId: string) => boolean) {
   const theme = useThemeStore.getState();
   if (theme.packId !== 'ocean' && !canUse(theme.packId)) {
@@ -89,6 +88,8 @@ interface ProStore {
   isLoaded: boolean;
   paywall: PaywallState;
   loadPro: () => Promise<void>;
+  /** Re-fetch Admin theme/Pro catalog (prices + Free with Pro flags). */
+  refreshCatalog: () => Promise<void>;
   /** Apply Pro from login /auth/me — avoids race before /api/pro/me */
   applyEntitlement: (
     entitlement: Partial<ProEntitlement> | null | undefined,
@@ -151,6 +152,21 @@ export const useProStore = create<ProStore>((set, get) => ({
   isLoaded: false,
   paywall: { visible: false, reason: 'ask_ai' },
 
+  refreshCatalog: async () => {
+    const catalog = await apiRequest<{
+      pro: ProCatalog | null;
+      themes: ThemePrice[];
+    }>('/api/pro/catalog');
+    set({
+      catalog: catalog.pro,
+      themePrices: (catalog.themes || []).map(t => ({
+        ...t,
+        includedInPro: t.includedInPro === true,
+      })),
+    });
+    await enforceCurrentThemeAccess(get().canUseThemePack);
+  },
+
   loadPro: async () => {
     try {
       const cached = await AsyncStorage.getItem(CACHE_KEY);
@@ -163,17 +179,9 @@ export const useProStore = create<ProStore>((set, get) => ({
     }
 
     try {
-      const catalog = await apiRequest<{
-        pro: ProCatalog | null;
-        themes: ThemePrice[];
-      }>('/api/pro/catalog');
-      set({
-        catalog: catalog.pro,
-        themePrices: catalog.themes || [],
-      });
-      await enforceCurrentThemeAccess(get().canUseThemePack);
+      await get().refreshCatalog();
     } catch {
-      // offline — keep defaults
+      // offline — keep last catalog; never invent Free-with-Pro packs
     }
 
     // Entitlement refresh waits for auth (App.tsx + login applyEntitlement).
@@ -239,8 +247,18 @@ export const useProStore = create<ProStore>((set, get) => ({
     const token = useAuthStore.getState().token;
     if (!token) throw new Error('Please sign in again.');
     const skus = skusFromCatalog(get().catalog);
+    const pendingThemePackId =
+      get().paywall.reason === 'theme' ? get().paywall.themePackId : undefined;
     await purchaseProSubscription(plan, skus);
     await get().refreshEntitlement();
+    if (
+      pendingThemePackId &&
+      get().canUseThemePack(pendingThemePackId)
+    ) {
+      await useThemeStore
+        .getState()
+        .setPackId(pendingThemePackId as any, true);
+    }
     set({ paywall: { visible: false, reason: get().paywall.reason } });
   },
 
@@ -261,15 +279,19 @@ export const useProStore = create<ProStore>((set, get) => ({
     const skus =
       Platform.OS === 'ios'
         ? {
-            monthly: theme.iosMonthlySku || '',
-            permanent: theme.iosPermanentSku || '',
+            monthly: theme.iosMonthlySku || DEFAULT_THEME_SKUS.monthly,
+            permanent: theme.iosPermanentSku || DEFAULT_THEME_SKUS.permanent,
           }
         : {
-            monthly: theme.androidMonthlySku || '',
-            permanent: theme.androidPermanentSku || '',
+            monthly: theme.androidMonthlySku || DEFAULT_THEME_SKUS.monthly,
+            permanent:
+              theme.androidPermanentSku || DEFAULT_THEME_SKUS.permanent,
           };
-    await purchaseThemePack(kind, skus);
+    await purchaseThemePack(kind, skus, packId);
     await get().refreshEntitlement();
+    if (get().canUseThemePack(packId)) {
+      await useThemeStore.getState().setPackId(packId as any, true);
+    }
     set({ paywall: { visible: false, reason: get().paywall.reason } });
   },
 
@@ -281,14 +303,15 @@ export const useProStore = create<ProStore>((set, get) => ({
     const skus =
       Platform.OS === 'ios'
         ? {
-            monthly: theme.iosMonthlySku || '',
-            permanent: theme.iosPermanentSku || '',
+            monthly: theme.iosMonthlySku || DEFAULT_THEME_SKUS.monthly,
+            permanent: theme.iosPermanentSku || DEFAULT_THEME_SKUS.permanent,
           }
         : {
-            monthly: theme.androidMonthlySku || '',
-            permanent: theme.androidPermanentSku || '',
+            monthly: theme.androidMonthlySku || DEFAULT_THEME_SKUS.monthly,
+            permanent:
+              theme.androidPermanentSku || DEFAULT_THEME_SKUS.permanent,
           };
-    await restoreThemePack(skus);
+    await restoreThemePack(skus, packId);
     await get().refreshEntitlement();
     set({ paywall: { visible: false, reason: get().paywall.reason } });
   },
@@ -296,10 +319,8 @@ export const useProStore = create<ProStore>((set, get) => ({
   canUseThemePack: packId => {
     if (packId === 'ocean') return true;
     if (get().ownedThemePacks.includes(packId)) return true;
+    // Admin catalog is the only source for Free with Pro — no hardcoded packs.
     const remote = get().themePrices.find(t => t.packId === packId);
-    const includedInPro = remote
-      ? remote.includedInPro === true
-      : DEFAULT_PRO_THEME_PACKS.has(packId);
-    return get().isPro && includedInPro;
+    return get().isPro && remote?.includedInPro === true;
   },
 }));

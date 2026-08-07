@@ -12,10 +12,18 @@ import {
 } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
 import { Spacing, Typography, Radius } from '../constants/theme';
+import { getColors } from '../constants/themes';
 import { useTheme } from '../hooks/useTheme';
 import { useProStore, PaywallReason } from '../store/proStore';
-import { getThemePackMeta } from '../constants/themePacks';
+import {
+  getActionGradient,
+  getActionGradientPoints,
+  getThemePackMeta,
+} from '../constants/themePacks';
 import { LEGAL_PRIVACY_URL, LEGAL_TERMS_URL } from '../constants/api';
+import { SpiderWebBackground } from './SpiderWebBackground';
+import { SilkFluidOverlay } from './SilkFluidOverlay';
+import { BlackSpiderMark } from './BlackSpiderMark';
 
 const REASON_COPY: Record<
   Exclude<PaywallReason, 'theme'>,
@@ -52,8 +60,12 @@ const REASON_COPY: Record<
 };
 
 export function PaywallModal() {
-  const { colors, gradientPoints, actionGradient } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const {
+    colors: appColors,
+    mode,
+    gradientPoints: appGradientPoints,
+    actionGradient: appActionGradient,
+  } = useTheme();
   const paywall = useProStore(s => s.paywall);
   const catalog = useProStore(s => s.catalog);
   const themePrices = useProStore(s => s.themePrices);
@@ -68,19 +80,40 @@ export function PaywallModal() {
   >(null);
   const [error, setError] = useState('');
 
+  const isTheme = paywall.reason === 'theme';
+  const isSpiderTheme =
+    isTheme && paywall.themePackId === 'red_web_spider';
+
+  // Spider paywall uses Red Web Spider palette even if current app theme differs.
+  const colors = useMemo(() => {
+    if (!isSpiderTheme) return appColors;
+    return getColors(mode, 'red_web_spider', 'default', 'default');
+  }, [isSpiderTheme, appColors, mode]);
+  const actionGradient = useMemo(() => {
+    if (!isSpiderTheme) return appActionGradient;
+    return getActionGradient(colors, 'red_web_spider');
+  }, [isSpiderTheme, appActionGradient, colors]);
+  const gradientPoints = useMemo(() => {
+    if (!isSpiderTheme) return appGradientPoints;
+    return getActionGradientPoints('red_web_spider', 'default');
+  }, [isSpiderTheme, appGradientPoints]);
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   if (!paywall.visible) return null;
 
-  const isTheme = paywall.reason === 'theme';
   const themeMeta = paywall.themePackId
     ? getThemePackMeta(paywall.themePackId as any)
     : null;
   const themePrice = themePrices.find(t => t.packId === paywall.themePackId);
+  const themeIncludedInPro = themePrice?.includedInPro === true;
 
   const title = isTheme
     ? `Unlock ${themeMeta?.name || 'theme'}`
     : REASON_COPY[paywall.reason as Exclude<PaywallReason, 'theme'>].title;
   const body = isTheme
-    ? 'Preview is free. Subscribe monthly or unlock it forever through your app store.'
+    ? themeIncludedInPro
+      ? 'Preview is free. This pack is included with Pro — or buy it once forever.'
+      : 'Preview is free. Unlock this pack with a one-time purchase (monthly also available).'
     : REASON_COPY[paywall.reason as Exclude<PaywallReason, 'theme'>].body;
 
   const monthly = catalog?.monthlyPrice ?? 49;
@@ -113,8 +146,15 @@ export function PaywallModal() {
           style={[
             styles.card,
             { backgroundColor: colors.surface, borderColor: colors.border },
+            isSpiderTheme && styles.spiderCard,
           ]}
         >
+          {isSpiderTheme ? (
+            <View style={styles.cardWebs} pointerEvents="none">
+              <SpiderWebBackground enabled variant="full" opacity={0.55} />
+              <SpiderWebBackground enabled variant="category" opacity={0.42} />
+            </View>
+          ) : null}
           <LinearGradient
             colors={[...actionGradient]}
             {...(gradientPoints
@@ -122,9 +162,29 @@ export function PaywallModal() {
               : { start: { x: 0, y: 0 }, end: { x: 1, y: 1 } })}
             style={styles.hero}
           >
-            <Text style={styles.heroBadge}>{isTheme ? 'THEME' : 'PRO'}</Text>
-            <Text style={styles.heroTitle}>{title}</Text>
-            <Text style={styles.heroBody}>{body}</Text>
+            {isSpiderTheme ? (
+              <>
+                <SilkFluidOverlay
+                  enabled
+                  active={paywall.visible}
+                  fill={0.72}
+                  intensity="medium"
+                />
+                {/* Webs above silk so they stay readable */}
+                <View style={styles.heroWebs} pointerEvents="none">
+                  <SpiderWebBackground enabled variant="hero" opacity={0.85} />
+                  <SpiderWebBackground enabled variant="insight" opacity={0.7} />
+                </View>
+                <BlackSpiderMark size={40} style={styles.spiderMark} />
+              </>
+            ) : null}
+            <View style={styles.heroCopy}>
+              <Text style={styles.heroBadge}>
+                {isSpiderTheme ? 'RED WEB SPIDER' : isTheme ? 'THEME' : 'PRO'}
+              </Text>
+              <Text style={styles.heroTitle}>{title}</Text>
+              <Text style={styles.heroBody}>{body}</Text>
+            </View>
           </LinearGradient>
 
           <ScrollView
@@ -237,39 +297,77 @@ export function PaywallModal() {
                 <Text style={[styles.perk, { color: colors.textSecondary }]}>
                   {themeMeta?.subtitle || 'Color pack'}
                 </Text>
-                <Pressable
-                  style={styles.primaryBtn}
-                  disabled={!!busy || !themePrice}
-                  onPress={() =>
-                    run(
-                      () => purchaseTheme(paywall.themePackId!, 'monthly'),
-                      'theme_m',
-                    )
-                  }
-                >
-                  <LinearGradient
-                    colors={[...actionGradient]}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.primaryGrad}
-                  >
-                    {busy === 'theme_m' ? (
-                      <ActivityIndicator color="#FFF" />
-                    ) : (
-                      <>
-                        <Text style={styles.primaryText}>
-                          {themePrice?.monthlyLabel || 'Monthly access'}
-                        </Text>
-                        <Text style={styles.primaryPrice}>
-                          ₹{themePrice?.monthlyPrice ?? 19}/month
-                        </Text>
-                      </>
-                    )}
-                  </LinearGradient>
-                </Pressable>
+
+                {themeIncludedInPro ? (
+                  <>
+                    <Text style={[styles.perk, { color: colors.textSecondary }]}>
+                      ✦ Included with Expenso Pro
+                    </Text>
+                    <Pressable
+                      style={styles.primaryBtn}
+                      disabled={!!busy}
+                      onPress={() => run(() => subscribe('yearly'), 'yearly')}
+                    >
+                      <LinearGradient
+                        colors={[...actionGradient]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.primaryGrad}
+                      >
+                        {busy === 'yearly' ? (
+                          <ActivityIndicator color="#FFF" />
+                        ) : (
+                          <>
+                            <Text style={styles.primaryText}>{yearlyLabel}</Text>
+                            <Text style={styles.primaryPrice}>
+                              ₹{yearly}/year
+                            </Text>
+                          </>
+                        )}
+                      </LinearGradient>
+                    </Pressable>
+                    <Pressable
+                      style={[
+                        styles.secondaryBtn,
+                        { borderColor: colors.border },
+                      ]}
+                      disabled={!!busy}
+                      onPress={() =>
+                        run(() => subscribe('monthly'), 'monthly')
+                      }
+                    >
+                      {busy === 'monthly' ? (
+                        <ActivityIndicator color={colors.primaryLight} />
+                      ) : (
+                        <>
+                          <Text
+                            style={[
+                              styles.secondaryText,
+                              { color: colors.text },
+                            ]}
+                          >
+                            {monthlyLabel}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.secondaryPrice,
+                              { color: colors.primaryLight },
+                            ]}
+                          >
+                            ₹{monthly}/month
+                          </Text>
+                        </>
+                      )}
+                    </Pressable>
+                  </>
+                ) : null}
 
                 <Pressable
-                  style={[styles.secondaryBtn, { borderColor: colors.border }]}
+                  style={
+                    themeIncludedInPro
+                      ? [styles.secondaryBtn, { borderColor: colors.border }]
+                      : styles.primaryBtn
+                  }
                   disabled={!!busy || !themePrice}
                   onPress={() =>
                     run(
@@ -278,14 +376,70 @@ export function PaywallModal() {
                     )
                   }
                 >
-                  {busy === 'theme_p' ? (
+                  {themeIncludedInPro ? (
+                    busy === 'theme_p' ? (
+                      <ActivityIndicator color={colors.primaryLight} />
+                    ) : (
+                      <>
+                        <Text
+                          style={[
+                            styles.secondaryText,
+                            { color: colors.text },
+                          ]}
+                        >
+                          {themePrice?.permanentLabel || 'Buy forever'}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.secondaryPrice,
+                            { color: colors.primaryLight },
+                          ]}
+                        >
+                          ₹{themePrice?.permanentPrice ?? 49} one-time
+                        </Text>
+                      </>
+                    )
+                  ) : (
+                    <LinearGradient
+                      colors={[...actionGradient]}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.primaryGrad}
+                    >
+                      {busy === 'theme_p' ? (
+                        <ActivityIndicator color="#FFF" />
+                      ) : (
+                        <>
+                          <Text style={styles.primaryText}>
+                            {themePrice?.permanentLabel || 'Buy forever'}
+                          </Text>
+                          <Text style={styles.primaryPrice}>
+                            ₹{themePrice?.permanentPrice ?? 49} one-time
+                          </Text>
+                        </>
+                      )}
+                    </LinearGradient>
+                  )}
+                </Pressable>
+
+                <Pressable
+                  style={[styles.secondaryBtn, { borderColor: colors.border }]}
+                  disabled={!!busy || !themePrice}
+                  onPress={() =>
+                    run(
+                      () => purchaseTheme(paywall.themePackId!, 'monthly'),
+                      'theme_m',
+                    )
+                  }
+                >
+                  {busy === 'theme_m' ? (
                     <ActivityIndicator color={colors.primaryLight} />
                   ) : (
                     <>
                       <Text
                         style={[styles.secondaryText, { color: colors.text }]}
                       >
-                        {themePrice?.permanentLabel || 'Buy forever'}
+                        {themePrice?.monthlyLabel || 'Monthly access'}
                       </Text>
                       <Text
                         style={[
@@ -293,7 +447,7 @@ export function PaywallModal() {
                           { color: colors.primaryLight },
                         ]}
                       >
-                        ₹{themePrice?.permanentPrice ?? 37} one-time
+                        ₹{themePrice?.monthlyPrice ?? 14}/month
                       </Text>
                     </>
                   )}
@@ -356,11 +510,37 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       overflow: 'hidden',
       borderWidth: 1,
       maxHeight: '88%',
+      position: 'relative',
+    },
+    spiderCard: {
+      borderColor: 'rgba(220,38,38,0.45)',
+    },
+    cardWebs: {
+      ...StyleSheet.absoluteFill,
+      zIndex: 0,
     },
     hero: {
       padding: Spacing.lg,
       paddingTop: Spacing.xl,
       paddingBottom: Spacing.lg,
+      minHeight: 176,
+      position: 'relative',
+      overflow: 'hidden',
+      zIndex: 1,
+    },
+    heroWebs: {
+      ...StyleSheet.absoluteFill,
+      zIndex: 2,
+    },
+    heroCopy: {
+      zIndex: 3,
+      paddingRight: 44,
+    },
+    spiderMark: {
+      position: 'absolute',
+      top: 12,
+      right: 12,
+      zIndex: 4,
     },
     heroBadge: {
       ...Typography.small,
@@ -382,6 +562,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
     body: {
       padding: Spacing.lg,
       gap: Spacing.sm,
+      zIndex: 1,
     },
     perk: {
       ...Typography.caption,

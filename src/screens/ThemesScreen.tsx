@@ -11,12 +11,16 @@ import {
 import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Spacing, Typography, Radius } from '../constants/theme';
+import { getColors } from '../constants/themes';
 import {
   THEME_PACKS,
   CHART_PALETTES,
   AppearanceMode,
   ThemePackId,
   ChartPaletteId,
+  getActionGradient,
+  getActionGradientPoints,
+  getGradientPoints,
 } from '../constants/themePacks';
 import { APP_ICON_PREVIEWS } from '../constants/appIcons';
 import { closeAppForIconRefresh } from '../native/appIcon';
@@ -24,6 +28,7 @@ import { useTheme } from '../hooks/useTheme';
 import { useProStore } from '../store/proStore';
 import { useAppIconStore } from '../store/appIconStore';
 import { AppAlertModal, AppAlertContent } from '../components/AppAlertModal';
+import { PaywallModal } from '../components/PaywallModal';
 import { SilkFluidOverlay } from '../components/SilkFluidOverlay';
 import { SpiderWebBackground } from '../components/SpiderWebBackground';
 import { BlackSpiderMark } from '../components/BlackSpiderMark';
@@ -36,31 +41,106 @@ type ThemesScreenProps = {
 export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
   const insets = useSafeAreaInsets();
   const {
-    colors,
     appearance,
+    mode,
     packId,
     chartPalette,
-    gradientPoints,
+    gradientStyle,
     setAppearance,
     setPackId,
     setChartPalette,
     resetToDefaults,
-    actionGradient,
   } = useTheme();
   const isPro = useProStore(s => s.isPro);
+  const ownedThemePacks = useProStore(s => s.ownedThemePacks);
   const openPaywall = useProStore(s => s.openPaywall);
-  const canUseThemePack = useProStore(s => s.canUseThemePack);
   const themePrices = useProStore(s => s.themePrices);
   const iconPackId = useAppIconStore(s => s.iconPackId);
   const iconSupported = useAppIconStore(s => s.supported);
   const loadAppIcon = useAppIconStore(s => s.load);
   const setIconForPack = useAppIconStore(s => s.setIconForPack);
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  /** Locked packs preview only — never persisted until entitled. */
+  const [previewPackId, setPreviewPackId] = useState<ThemePackId | null>(null);
   const [alert, setAlert] = useState<AppAlertContent | null>(null);
 
+  const displayPackId = previewPackId ?? packId;
+  const colors = useMemo(
+    () => getColors(mode, displayPackId, gradientStyle, chartPalette),
+    [mode, displayPackId, gradientStyle, chartPalette],
+  );
+  const gradientPoints = useMemo(() => {
+    if (displayPackId === 'red_web_spider') {
+      return getActionGradientPoints(displayPackId, gradientStyle);
+    }
+    return getGradientPoints(gradientStyle);
+  }, [displayPackId, gradientStyle]);
+  const actionGradient = useMemo(
+    () => getActionGradient(colors, displayPackId),
+    [colors, displayPackId],
+  );
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   useEffect(() => {
-    if (visible) void loadAppIcon();
+    if (!visible) {
+      setPreviewPackId(null);
+      return;
+    }
+    void loadAppIcon();
+    // Fresh Admin catalog + server ownership (clears stale local unlock cache).
+    const pro = useProStore.getState();
+    void Promise.all([
+      pro.refreshCatalog().catch(() => undefined),
+      pro.refreshEntitlement().catch(() => undefined),
+    ]);
   }, [visible, loadAppIcon]);
+
+  /** Lock from subscribed fields — not a stale function closure. */
+  const isPackLocked = useCallback(
+    (id: ThemePackId) => {
+      if (id === 'ocean') return false;
+      if (ownedThemePacks.includes(id)) return false;
+      const remote = themePrices.find(t => t.packId === id);
+      if (isPro && remote?.includedInPro === true) return false;
+      return true;
+    },
+    [ownedThemePacks, themePrices, isPro],
+  );
+
+  const packStatus = useCallback(
+    (id: ThemePackId) => {
+      if (id === 'ocean') return { label: 'Free', tone: 'free' as const };
+      if (ownedThemePacks.includes(id))
+        return { label: 'Owned', tone: 'owned' as const };
+      const remote = themePrices.find(t => t.packId === id);
+      if (isPro && remote?.includedInPro === true) {
+        return { label: 'With Pro', tone: 'pro' as const };
+      }
+      if (remote?.includedInPro === true) {
+        return { label: 'Pro', tone: 'pro' as const };
+      }
+      const price = remote?.permanentPrice;
+      return {
+        label: price != null ? `₹${price}` : 'Paid',
+        tone: 'paid' as const,
+      };
+    },
+    [ownedThemePacks, themePrices, isPro],
+  );
+
+  // If a locked pack was somehow saved earlier, snap back to Default.
+  useEffect(() => {
+    if (!visible) return;
+    if (packId !== 'ocean' && isPackLocked(packId)) {
+      void setPackId('ocean', true);
+    }
+  }, [visible, packId, isPackLocked, setPackId]);
+
+  // After a successful unlock while previewing, drop the ephemeral preview.
+  useEffect(() => {
+    if (previewPackId && !isPackLocked(previewPackId)) {
+      setPreviewPackId(null);
+    }
+  }, [previewPackId, isPackLocked]);
 
   const applyIconAndRestart = useCallback(
     async (id: ThemePackId, beforeApply?: () => Promise<void>) => {
@@ -108,31 +188,38 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
   );
 
   const onBack = useCallback(async () => {
-    if (packId !== 'ocean' && !canUseThemePack(packId)) {
-      openPaywall('theme', packId);
+    const lockedPreview = previewPackId;
+    setPreviewPackId(null);
+    if (packId !== 'ocean' && isPackLocked(packId)) {
       await setPackId('ocean', true);
     }
     onClose();
-  }, [packId, canUseThemePack, openPaywall, setPackId, onClose]);
+    // Themes Modal sits above App PaywallModal — open buy sheet after close.
+    if (lockedPreview && isPackLocked(lockedPreview)) {
+      setTimeout(() => openPaywall('theme', lockedPreview), 280);
+    }
+  }, [previewPackId, packId, isPackLocked, openPaywall, setPackId, onClose]);
 
   const onPickPack = useCallback(
     async (id: ThemePackId) => {
-      // Preview immediately so LIVE PREVIEW can show for everyone.
-      // Paywall only if they leave Themes without owning / Pro.
+      if (isPackLocked(id)) {
+        // Preview in-screen only; do not persist. Show buy sheet on top.
+        setPreviewPackId(id);
+        openPaywall('theme', id);
+        return;
+      }
+      setPreviewPackId(null);
       await setPackId(id, true);
     },
-    [setPackId],
+    [isPackLocked, openPaywall, setPackId],
   );
 
   const onPickIcon = useCallback(
     async (id: ThemePackId) => {
-      if (!canUseThemePack(id) && id !== 'ocean') {
-        openPaywall('theme', id);
-        return;
-      }
+      // App icons are free for everyone — only color packs are paid.
       await applyIconAndRestart(id);
     },
-    [canUseThemePack, openPaywall, applyIconAndRestart],
+    [applyIconAndRestart],
   );
 
   const onPickChart = useCallback(
@@ -193,7 +280,7 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
           },
         ]}
       >
-        {packId === 'red_web_spider' ? (
+        {displayPackId === 'red_web_spider' ? (
           <View style={styles.pageWebs} pointerEvents="none">
             <SpiderWebBackground variant="full" opacity={0.2} />
           </View>
@@ -220,23 +307,29 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
               style={StyleSheet.absoluteFill}
             />
             <SilkFluidOverlay
-              enabled={packId === 'red_web_spider'}
+              enabled={displayPackId === 'red_web_spider'}
               active={visible}
               fill={0.9}
               intensity="bold"
             />
-            {packId === 'red_web_spider' ? (
+            {displayPackId === 'red_web_spider' ? (
               <>
                 <SpiderWebBackground variant="hero" opacity={0.34} />
                 <BlackSpiderMark size={32} style={{ top: 10, right: 12 }} />
               </>
             ) : null}
             <View style={styles.previewContent}>
-              <Text style={styles.previewLabel}>LIVE PREVIEW</Text>
+              <Text style={styles.previewLabel}>
+                {previewPackId && previewPackId !== packId
+                  ? 'PREVIEW · LOCKED'
+                  : 'LIVE PREVIEW'}
+              </Text>
               <Text style={styles.previewAmount}>₹12,480</Text>
               <Text style={styles.previewSub}>
-                {packId === 'red_web_spider'
+                {displayPackId === 'red_web_spider'
                   ? 'Silk fluid · Red Web Spider'
+                  : previewPackId && isPackLocked(previewPackId)
+                  ? 'Buy to apply this pack'
                   : 'This month · your theme'}
               </Text>
               <View style={styles.previewDots}>
@@ -276,19 +369,24 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
           </View>
 
           <Text style={styles.section}>Color packs</Text>
+          <Text style={styles.sectionHint}>
+            Lock = buy required. With Pro = Admin Free-with-Pro. Owned = already
+            unlocked on this account.
+          </Text>
           <View style={styles.packGrid}>
             {THEME_PACKS.map(pack => {
-              const selected = packId === pack.id;
-              const locked = pack.id !== 'ocean' && !canUseThemePack(pack.id);
-              const remote = themePrices.find(t => t.packId === pack.id);
-              const includedInPro =
-                remote?.includedInPro === true ||
-                (!remote &&
-                  ['mint', 'midnight_gold', 'rose'].includes(pack.id));
+              const selected = displayPackId === pack.id;
+              const applied = packId === pack.id && !previewPackId;
+              const locked = isPackLocked(pack.id);
+              const status = packStatus(pack.id);
               return (
                 <Pressable
                   key={pack.id}
-                  style={[styles.packCard, selected && styles.packCardSelected]}
+                  style={[
+                    styles.packCard,
+                    selected && styles.packCardSelected,
+                    locked && styles.packCardLocked,
+                  ]}
                   onPress={() => void onPickPack(pack.id)}
                 >
                   <LinearGradient
@@ -297,19 +395,43 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
                     end={{ x: 1, y: 1 }}
                     style={styles.packSwatch}
                   >
-                    {locked ? <Text style={styles.lockGlyph}>🔒</Text> : null}
-                    {selected ? <Text style={styles.checkGlyph}>✓</Text> : null}
+                    {locked ? <View style={styles.swatchDim} /> : null}
+                    {locked ? (
+                      <View style={styles.lockBadge}>
+                        <Text style={styles.lockBadgeText}>LOCK</Text>
+                      </View>
+                    ) : null}
+                    {applied ? (
+                      <View style={styles.appliedBadge}>
+                        <Text style={styles.appliedBadgeText}>✓</Text>
+                      </View>
+                    ) : null}
                   </LinearGradient>
                   <Text style={styles.packName} numberOfLines={1}>
                     {pack.name}
                   </Text>
-                  <Text style={styles.packSub} numberOfLines={1}>
-                    {pack.id === 'ocean'
-                      ? 'Free'
-                      : includedInPro
-                      ? 'Included with Pro'
-                      : 'Buy separately'}
-                  </Text>
+                  <View
+                    style={[
+                      styles.statusPill,
+                      status.tone === 'free' && styles.statusFree,
+                      status.tone === 'pro' && styles.statusPro,
+                      status.tone === 'paid' && styles.statusPaid,
+                      status.tone === 'owned' && styles.statusOwned,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.statusPillText,
+                        status.tone === 'free' && styles.statusFreeText,
+                        status.tone === 'pro' && styles.statusProText,
+                        status.tone === 'paid' && styles.statusPaidText,
+                        status.tone === 'owned' && styles.statusOwnedText,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {locked ? `🔒 ${status.label}` : status.label}
+                    </Text>
+                  </View>
                 </Pressable>
               );
             })}
@@ -363,12 +485,12 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
 
           <Text style={styles.section}>App icon</Text>
           <Text style={styles.sectionHint}>
-            Choose a home screen icon. Access follows the matching theme pack.
+            All icons are free. Only color packs may require Pro or a one-time
+            buy.
           </Text>
           <View style={styles.iconGrid}>
             {THEME_PACKS.map(pack => {
               const iconActive = iconPackId === pack.id;
-              const locked = pack.pro && !canUseThemePack(pack.id);
               return (
                 <Pressable
                   key={`icon-${pack.id}`}
@@ -381,11 +503,6 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
                       style={styles.packIcon}
                       resizeMode="cover"
                     />
-                    {locked ? (
-                      <View style={styles.packIconBadge}>
-                        <Text style={styles.packIconBadgeText}>🔒</Text>
-                      </View>
-                    ) : null}
                     {iconActive ? (
                       <View
                         style={[styles.packIconBadge, styles.packIconBadgeHome]}
@@ -415,9 +532,18 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
           <View style={styles.proCard}>
             <Text style={styles.proCardTitle}>Theme unlocks</Text>
             <Text style={styles.proCardSub}>
-              Default is free. Pro includes Mint Money, Midnight Gold and Rose.
-              Other packs can be unlocked monthly or bought once; availability
-              and display pricing come from Admin.
+              {(() => {
+                const proNames = THEME_PACKS.filter(p =>
+                  themePrices.some(
+                    t => t.packId === p.id && t.includedInPro === true,
+                  ),
+                ).map(p => p.name);
+                const proList =
+                  proNames.length > 0
+                    ? proNames.join(', ')
+                    : 'no packs yet (set Free with Pro in Admin)';
+                return `Default is free. Pro includes ${proList}. Other packs need a one-time buy (monthly optional). `;
+              })()}
             </Text>
           </View>
         </ScrollView>
@@ -431,6 +557,8 @@ export function ThemesScreen({ visible, onClose }: ThemesScreenProps) {
         buttons={alert?.buttons}
         onClose={() => setAlert(null)}
       />
+      {/* Nested so buy sheet appears above this Themes Modal */}
+      <PaywallModal />
     </Modal>
   );
 }
@@ -439,7 +567,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
   return StyleSheet.create({
     root: { flex: 1 },
     pageWebs: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
       zIndex: 0,
     },
     scrollFlex: { flex: 1, zIndex: 1 },
@@ -500,7 +628,7 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       backgroundColor: colors.gradientStart,
     },
     previewGrad: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
     },
     previewContent: {
       padding: Spacing.lg,
@@ -558,12 +686,12 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       marginBottom: Spacing.md,
     },
     packCard: {
-      width: '31%',
+      width: '48%',
       flexGrow: 1,
-      maxWidth: '32%',
+      maxWidth: '49%',
       backgroundColor: colors.surface,
       borderRadius: Radius.lg,
-      padding: Spacing.sm,
+      padding: Spacing.sm + 2,
       borderWidth: 1,
       borderColor: colors.border,
     },
@@ -571,13 +699,90 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       borderColor: colors.primary,
       backgroundColor: colors.primary + '12',
     },
+    packCardLocked: {
+      opacity: 0.96,
+    },
     packSwatch: {
-      height: 44,
+      height: 52,
       borderRadius: Radius.md,
       alignItems: 'center',
       justifyContent: 'center',
       marginBottom: Spacing.sm,
+      overflow: 'hidden',
+      position: 'relative',
     },
+    swatchDim: {
+      ...StyleSheet.absoluteFill,
+      backgroundColor: 'rgba(0,0,0,0.38)',
+    },
+    lockBadge: {
+      position: 'absolute',
+      top: 6,
+      right: 6,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 6,
+      backgroundColor: 'rgba(0,0,0,0.72)',
+      borderWidth: 1,
+      borderColor: 'rgba(255,255,255,0.35)',
+      zIndex: 2,
+    },
+    lockBadgeText: {
+      color: '#FFF',
+      fontSize: 9,
+      fontWeight: '800',
+      letterSpacing: 0.5,
+    },
+    appliedBadge: {
+      position: 'absolute',
+      left: 6,
+      bottom: 6,
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex: 2,
+    },
+    appliedBadgeText: {
+      color: '#FFF',
+      fontWeight: '800',
+      fontSize: 12,
+    },
+    statusPill: {
+      marginTop: 4,
+      alignSelf: 'flex-start',
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 6,
+      borderWidth: 1,
+    },
+    statusPillText: {
+      fontSize: 10,
+      fontWeight: '800',
+    },
+    statusFree: {
+      backgroundColor: 'rgba(16,185,129,0.15)',
+      borderColor: 'rgba(16,185,129,0.45)',
+    },
+    statusFreeText: { color: '#34D399' },
+    statusPro: {
+      backgroundColor: 'rgba(251,191,36,0.15)',
+      borderColor: 'rgba(251,191,36,0.5)',
+    },
+    statusProText: { color: '#FBBF24' },
+    statusPaid: {
+      backgroundColor: 'rgba(248,113,113,0.14)',
+      borderColor: 'rgba(248,113,113,0.45)',
+    },
+    statusPaidText: { color: '#F87171' },
+    statusOwned: {
+      backgroundColor: 'rgba(99,102,241,0.16)',
+      borderColor: 'rgba(99,102,241,0.45)',
+    },
+    statusOwnedText: { color: '#A5B4FC' },
+    iconDimmed: { opacity: 0.55 },
     iconGrid: {
       flexDirection: 'row',
       flexWrap: 'wrap',
@@ -616,20 +821,27 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       position: 'absolute',
       right: 2,
       bottom: 2,
-      width: 18,
-      height: 18,
-      borderRadius: 9,
-      backgroundColor: '#00000088',
+      minWidth: 28,
+      height: 16,
+      paddingHorizontal: 4,
+      borderRadius: 6,
+      backgroundColor: 'rgba(0,0,0,0.78)',
       alignItems: 'center',
       justifyContent: 'center',
     },
     packIconBadgeHome: {
       backgroundColor: colors.primary,
+      minWidth: 18,
+      width: 18,
+      height: 18,
+      borderRadius: 9,
+      paddingHorizontal: 0,
     },
     packIconBadgeText: {
-      fontSize: 10,
+      fontSize: 8,
       color: '#FFF',
       fontWeight: '800',
+      letterSpacing: 0.3,
     },
     iconName: {
       ...Typography.small,
@@ -638,18 +850,10 @@ function createStyles(colors: ReturnType<typeof useTheme>['colors']) {
       fontSize: 10,
       textAlign: 'center',
     },
-    lockGlyph: { fontSize: 14 },
-    checkGlyph: { color: '#FFF', fontWeight: '800', fontSize: 16 },
     packName: {
       ...Typography.small,
       color: colors.text,
       fontWeight: '700',
-    },
-    packSub: {
-      ...Typography.small,
-      color: colors.textMuted,
-      fontSize: 10,
-      marginTop: 1,
     },
     row: {
       flexDirection: 'row',

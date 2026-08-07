@@ -87,6 +87,7 @@ function isUserCancel(err: any) {
 async function verifyPurchaseOnServer(
   purchase: Purchase,
   endpoint = '/api/pro/iap/verify',
+  extra: { packId?: string; consumable?: boolean } = {},
 ) {
   const token = useAuthStore.getState().token;
   if (!token) throw new Error('Please sign in again.');
@@ -106,10 +107,14 @@ async function verifyPurchaseOnServer(
         Platform.OS === 'android'
           ? (purchase as any).packageNameAndroid || 'com.kriovent.expenso'
           : undefined,
+      packId: extra.packId,
     },
   });
 
-  await finishTransaction({ purchase, isConsumable: false });
+  await finishTransaction({
+    purchase,
+    isConsumable: extra.consumable === true,
+  });
 }
 
 function waitForPurchase(
@@ -244,11 +249,18 @@ export async function restoreProPurchases(
   return true;
 }
 
+export const DEFAULT_THEME_SKUS: ThemeSkus = {
+  monthly: 'com.kriovent.expenso.theme.monthly',
+  permanent: 'com.kriovent.expenso.theme.permanent',
+};
+
 export async function purchaseThemePack(
   kind: 'monthly' | 'permanent',
   skus: ThemeSkus,
+  packId: string,
 ): Promise<void> {
   await ensureIapConnected();
+  if (!packId) throw new Error('Theme pack is required.');
   const productId = kind === 'monthly' ? skus.monthly : skus.permanent;
   if (!productId) throw new Error('Theme store product ID is not configured.');
   const type = kind === 'monthly' ? 'subs' : 'in-app';
@@ -264,42 +276,70 @@ export async function purchaseThemePack(
     );
   }
   const purchasePromise = waitForPurchase(productId);
-  if (kind === 'monthly' && Platform.OS === 'android') {
-    const offerToken = (product.subscriptionOffers || []).find(
-      (offer: any) => offer.offerTokenAndroid,
-    )?.offerTokenAndroid;
-    if (!offerToken)
-      throw new Error('Add a base plan for this theme in Play Console.');
-    await requestPurchase({
-      type: 'subs',
-      request: {
-        google: {
-          skus: [productId],
-          subscriptionOffers: [{ sku: productId, offerToken }],
+  try {
+    if (kind === 'monthly' && Platform.OS === 'android') {
+      const offerToken = (product.subscriptionOffers || []).find(
+        (offer: any) => offer.offerTokenAndroid,
+      )?.offerTokenAndroid;
+      if (!offerToken)
+        throw new Error('Add a base plan for this theme in Play Console.');
+      await requestPurchase({
+        type: 'subs',
+        request: {
+          google: {
+            skus: [productId],
+            subscriptionOffers: [{ sku: productId, offerToken }],
+          },
         },
-      },
+      });
+    } else {
+      await requestPurchase({
+        type: type as any,
+        request:
+          Platform.OS === 'android'
+            ? ({ google: { skus: [productId] } } as any)
+            : ({ apple: { sku: productId } } as any),
+      });
+    }
+    const purchase = await purchasePromise;
+    await verifyPurchaseOnServer(purchase, '/api/pro/themes/iap/verify', {
+      packId,
+      // Shared permanent product must be consumable so each theme can be bought.
+      consumable: kind === 'permanent',
     });
-  } else {
-    await requestPurchase({
-      type: type as any,
-      request:
-        Platform.OS === 'android'
-          ? ({ google: { skus: [productId] } } as any)
-          : ({ apple: { sku: productId } } as any),
-    });
+  } catch (err: any) {
+    purchasePromise.catch(() => undefined);
+    // Shared monthly SKU: already subscribed → grant this pack via restore.
+    const msg = String(err?.message || err || '').toLowerCase();
+    if (
+      kind === 'monthly' &&
+      (msg.includes('already') ||
+        msg.includes('owned') ||
+        msg.includes('subscribed'))
+    ) {
+      await restoreThemePack(skus, packId);
+      return;
+    }
+    throw err;
   }
-  const purchase = await purchasePromise;
-  await verifyPurchaseOnServer(purchase, '/api/pro/themes/iap/verify');
 }
 
-export async function restoreThemePack(skus: ThemeSkus): Promise<void> {
+export async function restoreThemePack(
+  skus: ThemeSkus,
+  packId: string,
+): Promise<void> {
   await ensureIapConnected();
+  if (!packId) throw new Error('Theme pack is required.');
   const allowed = new Set([skus.monthly, skus.permanent].filter(Boolean));
   const purchases = await getAvailablePurchases();
   const purchase = (purchases || []).find(item => allowed.has(item.productId));
   if (!purchase)
     throw new Error(
-      'No purchase for this theme was found on this store account.',
+      'No theme purchase was found on this store account.',
     );
-  await verifyPurchaseOnServer(purchase, '/api/pro/themes/iap/verify');
+  const consumable = purchase.productId === skus.permanent;
+  await verifyPurchaseOnServer(purchase, '/api/pro/themes/iap/verify', {
+    packId,
+    consumable,
+  });
 }

@@ -52,6 +52,14 @@ The client still opens the real Play purchase sheet when products exist; the ser
 3. Server verifies with Google → activates Pro + stores `ProPurchase`  
 4. **Restore purchases** re-links an existing store subscription to the signed-in account  
 
-## Themes
+## Themes (shared products)
 
-Theme packs still use the temporary unlock API. Wire theme SKUs the same way when you are ready.
+All paid themes share **two** store products (display ₹14 / ₹49):
+
+| Kind | Product ID | Play type |
+|------|------------|-----------|
+| Monthly | `com.kriovent.expenso.theme.monthly` | Subscription |
+| One-time | `com.kriovent.expenso.theme.permanent` | **Consumable** in-app product |
+
+The app sends `packId` with verify so the server unlocks the selected theme.
+Permanent **must** be consumable so users can buy more than one theme.
